@@ -1,0 +1,22 @@
+name = "resofrik-autopilot"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+
+# Every 15 minutes: publish, reminders, now playing, inbox, community desk, weekly report.
+# Saturday 22:00 UTC: write next week's posts and ask the Studio for carousels.
+[triggers]
+crons = ["*/15 * * * *", "0 22 * * 6"]
+
+# Database (create with: npx wrangler d1 create resofrik-autopilot)
+[[d1_databases]]
+binding = "DB"
+database_name = "resofrik-autopilot"
+database_id = "PASTE_D1_ID_HERE"
+
+# Media storage for pictures and videos (create with: npx wrangler r2 bucket create resofrik-media)
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "resofrik-media"
+
+[observability]
+enabled = true
