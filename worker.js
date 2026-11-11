@@ -136,6 +136,8 @@ export default {
     resetBudget();
     try {
       await ensureSchema(env);
+      env = await withPageToken(env);
+      MEDIA_ENV = env;
       return await handleHttp(request, env, ctx);
     } catch (e) {
       return new Response("Something went wrong: " + esc(String((e && e.message) || e)), { status: 500, headers: { "content-type": "text/html; charset=utf-8" } });
@@ -150,6 +152,8 @@ async function runScheduled(cron, env) {
   MEDIA_ENV = env;
   resetBudget();
   await ensureSchema(env);
+  env = await withPageToken(env);
+  MEDIA_ENV = env;
   if (cron === WEEKLY_CRON) await weeklyJob(env, { force: false });
   else await tick(env);
 }
@@ -184,6 +188,23 @@ async function kvGet(env, k) {
 async function kvPut(env, k, v, ttlSec) {
   const exp = ttlSec ? Date.now() + ttlSec * 1000 : null;
   await env.DB.prepare("INSERT INTO kv (k, v, exp) VALUES (?, ?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v, exp = excluded.exp").bind(k, String(v), exp).run();
+}
+// FB_PAGE_TOKEN may be a (long-lived) user token: swap it once for the Page's own token, which never expires, and keep it.
+async function withPageToken(env) {
+  const src = String(env.FB_PAGE_TOKEN || "").trim();
+  if (!src || !env.FB_PAGE_ID || !env.DB) return env;
+  const key = "pagetok:" + src.slice(-24);
+  let tok = await kvGet(env, key);
+  if (!tok) {
+    tok = src;
+    try {
+      const r = await xfetch(`${graph(env)}/${env.FB_PAGE_ID}?fields=access_token&access_token=${encodeURIComponent(src)}`);
+      const d = await r.json();
+      if (d && d.access_token) tok = d.access_token;
+    } catch {}
+    await kvPut(env, key, tok);
+  }
+  return { ...env, FB_PAGE_TOKEN: tok };
 }
 async function kvDel(env, k) {
   await env.DB.prepare("DELETE FROM kv WHERE k = ?").bind(k).run();
