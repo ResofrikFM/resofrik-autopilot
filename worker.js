@@ -1131,11 +1131,11 @@ const PLATFORMS = {
   threads: {
     label: "Threads",
     takes: ["none", "image", "images", "video"],
-    ready: (env) => !!(env.THREADS_USER_ID && env.THREADS_TOKEN),
+    ready: (env) => !!env.THREADS_TOKEN,
     publish: publishThreads,
     resume: resumeMetaContainer("threads"),
     test: testThreads,
-    help: "THREADS_USER_ID and THREADS_TOKEN (long-lived; renewed weekly by the robot).",
+    help: "THREADS_TOKEN (long-lived; renewed weekly by the robot). THREADS_USER_ID is optional.",
   },
   mastodon: {
     label: "Mastodon",
@@ -1434,21 +1434,24 @@ async function testInstagram(env) {
   const d = await getJson(`${graph(env)}/${env.IG_USER_ID}?fields=username&access_token=${encodeURIComponent(env.FB_PAGE_TOKEN)}`);
   return "Connected to Instagram: @" + d.username;
 }
+function threadsKey(env) {
+  return "threads:token:" + String(env.THREADS_TOKEN || "").replace(/\s+/g, "").slice(-24);
+}
 async function threadsToken(env) {
-  return (await kvGet(env, "threads:token")) || env.THREADS_TOKEN;
+  return (await kvGet(env, threadsKey(env))) || String(env.THREADS_TOKEN || "").replace(/\s+/g, "");
 }
 async function refreshThreadsToken(env) {
   if (!env.THREADS_TOKEN) return;
   const d = await getJson(`https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token&access_token=${encodeURIComponent(await threadsToken(env))}`);
   if (!d.access_token) throw new Error("no token returned");
-  await kvPut(env, "threads:token", d.access_token);
+  await kvPut(env, threadsKey(env), d.access_token);
 }
 async function publishThreads(env, settings, post, p) {
   const token = await threadsToken(env);
   const url = postLink(env, settings, post, p);
   const tail = url ? "\n\n" + url : "";
   const text = fit(shortText(post), 480 - graphemes(tail)) + tail;
-  const base = `https://graph.threads.net/v1.0/${env.THREADS_USER_ID}`;
+  const base = `https://graph.threads.net/v1.0/${env.THREADS_USER_ID || "me"}`;
   const t = post.media.type;
   let id;
   if (t === "none") {
@@ -1479,7 +1482,7 @@ function resumeMetaContainer(platform) {
     const st = await getJson(`https://graph.threads.net/v1.0/${state.id}?fields=status,error_message&access_token=${encodeURIComponent(token)}`);
     if (st.status === "ERROR" || st.status === "EXPIRED") throw new Error("Threads couldn't process the media: " + (st.error_message || ""));
     if (st.status && st.status !== "FINISHED") return { pending: true, state };
-    return { id: (await graphPost(`https://graph.threads.net/v1.0/${env.THREADS_USER_ID}/threads_publish`, { creation_id: state.id, access_token: token })).id };
+    return { id: (await graphPost(`https://graph.threads.net/v1.0/${env.THREADS_USER_ID || "me"}/threads_publish`, { creation_id: state.id, access_token: token })).id };
   };
 }
 async function testThreads(env) {
