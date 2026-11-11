@@ -1255,7 +1255,7 @@ async function fetchBytes(url, max) {
 // --- Bluesky -----------------------------------------------------------------
 async function bskySession(env) {
   const base = env.BLUESKY_SERVICE || "https://bsky.social";
-  const res = await xfetch(base + "/xrpc/com.atproto.server.createSession", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ identifier: env.BLUESKY_HANDLE, password: env.BLUESKY_APP_PASSWORD }) });
+  const res = await xfetch(base + "/xrpc/com.atproto.server.createSession", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ identifier: String(env.BLUESKY_HANDLE || "").trim().replace(/^@/, ""), password: String(env.BLUESKY_APP_PASSWORD || "").replace(/\s+/g, "") }) });
   const d = await readJson(res);
   if (!res.ok) throw new Error("login: " + apiError(d, res));
   let pds = base;
