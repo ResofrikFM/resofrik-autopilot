@@ -381,7 +381,9 @@ def scout():
 # ---------------------------------------------------------------------------
 # Rendering: HTML -> JPG/PNG with headless Chrome
 # ---------------------------------------------------------------------------
-FONTS_LINK = '<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">'
+FONTS_LINK = '<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Figtree:ital,wght@0,400;0,600;0,800;1,600&display=swap" rel="stylesheet">'
+DISPLAY = "'Unbounded','Archivo Black','DejaVu Sans',sans-serif"
+BODY = "'Figtree',Inter,'DejaVu Sans',Arial,sans-serif"
 
 
 def chrome_shot(html_doc, w, h, out_png, transparent=False):
@@ -405,51 +407,112 @@ def to_jpg(png, jpg):
 
 def brand():
     st = SETTINGS.get("station", {})
-    return {"name": st.get("name", "Resofrik FM"), "slogan": st.get("slogan", "For The Rare Breed"), "accent": st.get("brandColor", "#c9a227"), "dark": st.get("darkColor", "#111111"), "logo": st.get("logoUrl", ""), "label": st.get("linkLabel", "resofrikfm.com"), "city": st.get("city", "Cleveland")}
+    acc = st.get("brandColor") or "#f7901e"
+    if acc.lower() == "#c9a227":  # old placeholder gold -> station orange
+        acc = "#f7901e"
+    dark = st.get("darkColor") or "#070707"
+    if dark.lower() == "#111111":
+        dark = "#070707"
+    pal = st.get("palette") or {}
+    return {"name": st.get("name", "Resofrik FM"), "slogan": st.get("slogan", "For The Rare Breed"), "accent": acc, "dark": dark,
+            "red": pal.get("red", "#da1a1a"), "green": pal.get("green", "#00a11a"), "lime": pal.get("lime", "#d9f012"), "text": pal.get("text", "#f2eee4"), "muted": pal.get("muted", "#b4b0a8"),
+            "logo": st.get("logoUrl") or "https://resofrikfm.com/logo.png", "label": st.get("linkLabel", "resofrikfm.com"), "city": st.get("city", "Cleveland")}
+
+
+def tone(pillar):
+    """Each content pillar gets one of the logo's colours."""
+    b = brand()
+    return {"music": b["accent"], "program": b["lime"], "community": b["green"], "behind": b["red"], "cta": b["accent"], "reminder": b["red"], "manual": b["accent"]}.get(pillar, b["accent"])
+
+
+def ink_on(color):
+    """Dark or light text for a coloured chip."""
+    c = color.lstrip("#")
+    r, g, bl = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    return "#0a0a0a" if (0.299 * r + 0.587 * g + 0.114 * bl) > 140 else "#ffffff"
 
 
 BASE_CSS = """
 *{box-sizing:border-box;margin:0;padding:0}html,body{width:%(w)dpx;height:%(h)dpx;overflow:hidden}
-body{font-family:Inter,'DejaVu Sans',Arial,sans-serif;color:#f6f2ea;background:%(dark)s;position:relative}
-.bg{position:absolute;inset:0;background:radial-gradient(1200px 900px at 85%% -10%%, %(accent)s55, transparent 60%%),radial-gradient(900px 700px at -10%% 110%%, %(accent)s33, transparent 60%%),%(dark)s}
-.grain{position:absolute;inset:0;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 2px,transparent 2px 4px)}
-.rings{position:absolute;right:-220px;top:-220px;width:760px;height:760px;border-radius:50%%;border:2px solid %(accent)s55;box-shadow:0 0 0 60px %(accent)s14,0 0 0 120px %(accent)s0d,0 0 0 180px %(accent)s08}
-.top{position:absolute;left:72px;right:72px;top:64px;display:flex;align-items:center;gap:22px}
-.logo{height:92px;width:auto;border-radius:14px}.word{font-family:'Archivo Black',Inter,sans-serif;font-size:40px;letter-spacing:.5px}
-.chip{display:inline-block;background:%(accent)s;color:#111;font-weight:800;font-size:26px;letter-spacing:2px;text-transform:uppercase;padding:10px 20px;border-radius:999px}
-.main{position:absolute;left:72px;right:72px;top:250px;bottom:210px;display:flex;flex-direction:column;justify-content:center;gap:34px}
-.head{font-family:'Archivo Black',Inter,sans-serif;line-height:1.02;font-size:112px;letter-spacing:-1px;text-wrap:balance}
-.sub{font-size:40px;line-height:1.35;color:#e9e2d4;text-wrap:pretty}
-.meta{font-size:36px;font-weight:800;color:%(accent)s}
-.foot{position:absolute;left:72px;right:72px;bottom:64px;display:flex;justify-content:space-between;align-items:flex-end;font-size:30px;color:#cfc7b8}
-.foot b{color:#fff;font-size:34px}.slogan{font-style:italic;color:%(accent)s}
-.num{font-family:'Archivo Black',Inter,sans-serif;font-size:220px;line-height:.8;color:%(accent)s;opacity:.95}
-.photo{width:100%%;height:400px;object-fit:cover;border-radius:28px;border:4px solid %(accent)s}
-.bar{position:absolute;left:0;right:0;bottom:0;height:14px;background:%(accent)s}
+body{font-family:%(body)s;color:%(text)s;background:%(dark)s;position:relative;-webkit-font-smoothing:antialiased}
+.bg{position:absolute;inset:0;background:radial-gradient(900px 700px at 100%% 0%%, %(accent)s30, transparent 62%%),radial-gradient(800px 600px at 0%% 100%%, %(green)s1f, transparent 60%%),%(dark)s}
+.grain{position:absolute;inset:0;opacity:.35;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:5px 5px}
+.motif{position:absolute;right:-210px;top:-210px;width:640px;height:640px}
+.top{position:absolute;left:72px;right:72px;top:62px;display:flex;align-items:center;gap:22px}
+.logo{height:140px;width:auto;display:block}.word{font-family:%(display)s;font-weight:800;font-size:40px}
+.chip{display:inline-flex;align-items:center;gap:12px;background:var(--tone);color:var(--ink);font-family:%(body)s;font-weight:800;font-size:25px;letter-spacing:3px;text-transform:uppercase;padding:12px 22px 11px;border-radius:999px}
+.chip i{width:12px;height:12px;border-radius:50%%;background:var(--ink);opacity:.8}
+.main{position:absolute;left:72px;right:72px;top:390px;bottom:220px;display:flex;flex-direction:column;justify-content:center;gap:30px}
+.head{font-family:%(display)s;font-weight:700;line-height:1.06;font-size:96px;letter-spacing:-1.5px;text-wrap:balance}
+.head em{font-style:normal;color:var(--tone)}
+.stripe{display:flex;gap:8px}.stripe span{height:8px;width:56px;border-radius:8px}
+.sub{font-size:40px;line-height:1.38;color:%(muted)s;text-wrap:pretty;max-width:900px}
+.meta{font-size:34px;font-weight:800;color:var(--tone);letter-spacing:.3px}
+.foot{position:absolute;left:72px;right:72px;bottom:66px;display:flex;justify-content:space-between;align-items:center;font-size:30px;color:%(muted)s}
+.cta{display:flex;align-items:center;gap:16px}.play{width:62px;height:62px;border-radius:50%%;background:%(accent)s;display:flex;align-items:center;justify-content:center}
+.play:after{content:"";border-left:20px solid #0a0a0a;border-top:12px solid transparent;border-bottom:12px solid transparent;margin-left:6px}
+.play.go:after{content:"\\2192";border:0;margin:0;color:#0a0a0a;font-weight:800;font-size:34px;line-height:1}
+.cta b{display:block;color:%(text)s;font-size:32px;font-weight:800}
+.slogan{font-weight:800;font-size:24px;letter-spacing:5px;text-transform:uppercase;color:%(accent)s}
+.num{font-family:%(display)s;font-weight:800;font-size:200px;line-height:.8;color:transparent;-webkit-text-stroke:3px var(--tone)}
+.photo{width:100%%;height:420px;object-fit:cover;border-radius:32px;display:block}
+.bar{position:absolute;left:0;right:0;bottom:0;height:16px;display:flex}.bar span{flex:1}
 """
 
 FIT_JS = """<script>
-function fit(sel,min){document.querySelectorAll(sel).forEach(function(el){var box=document.querySelector('.main');var fs=parseFloat(getComputedStyle(el).fontSize);
+function fit(sel,min){document.querySelectorAll(sel).forEach(function(el){var box=document.querySelector('.main');if(!box)return;var fs=parseFloat(getComputedStyle(el).fontSize);
 var guard=0;while((box.scrollHeight>box.clientHeight+2||el.scrollWidth>el.clientWidth+2)&&fs>min&&guard<200){fs-=3;el.style.fontSize=fs+'px';guard++;}});}
-document.fonts&&document.fonts.ready.then(function(){fit('.head',44);fit('.sub',26);});fit('.head',44);fit('.sub',26);
+function go(){fit('.head',44);fit('.sub',26);}
+go();document.fonts&&document.fonts.ready.then(go);
 </script>"""
 
 
-def page(body, w=CW, h=CH, extra_css=""):
+def motif_svg(b):
+    """The logo's red ring and three sound-wave arcs, drawn large."""
+    def arc(r, color, start, sweep, width):
+        c = 2 * math.pi * r
+        return f"<circle cx='380' cy='380' r='{r}' fill='none' stroke='{color}' stroke-width='{width}' stroke-linecap='round' stroke-dasharray='{c * sweep / 360:.1f} {c:.1f}' transform='rotate({start} 380 380)'/>"
+    return ("<svg class='motif' viewBox='0 0 760 760'>" + arc(330, b["red"], 40, 280, 26)
+            + arc(250, b["lime"], 200, 52, 30) + arc(196, b["green"], 205, 44, 30) + arc(142, b["accent"], 210, 38, 30) + "</svg>")
+
+
+def stripe_html(b):
+    return "<div class='stripe'>" + "".join(f"<span style='background:{c}'></span>" for c in (b["red"], b["accent"], b["lime"], b["green"])) + "</div>"
+
+
+def page(body, w=CW, h=CH, extra_css="", pillar=None, motif=True):
     b = brand()
-    css = BASE_CSS % {"w": w, "h": h, "accent": b["accent"], "dark": b["dark"]}
-    return f"<!doctype html><html><head><meta charset='utf-8'>{FONTS_LINK}<style>{css}{extra_css}</style></head><body><div class='bg'></div><div class='grain'></div><div class='rings'></div>{body}<div class='bar'></div>{FIT_JS}</body></html>"
+    t = tone(pillar) if pillar else b["accent"]
+    css = BASE_CSS % {"w": w, "h": h, "dark": b["dark"], "accent": b["accent"], "green": b["green"], "text": b["text"], "muted": b["muted"], "display": DISPLAY, "body": BODY}
+    bar = "<div class='bar'>" + "".join(f"<span style='background:{c}'></span>" for c in (b["red"], b["accent"], b["lime"], b["green"])) + "</div>"
+    return (f"<!doctype html><html><head><meta charset='utf-8'>{FONTS_LINK}<style>:root{{--tone:{t};--ink:{ink_on(t)}}}{css}{extra_css}</style></head>"
+            f"<body><div class='bg'></div><div class='grain'></div>{motif_svg(b) if motif else ''}{body}{bar}{FIT_JS}</body></html>")
 
 
 def top_html():
     b = brand()
-    logo = f"<img class='logo' src='{esc(b['logo'])}' alt=''>" if b["logo"] else ""
-    return f"<div class='top'>{logo}<div class='word'>{esc(b['name'])}</div></div>"
+    if b["logo"]:
+        return f"<div class='top'><img class='logo' src='{esc(b['logo'])}' alt=''></div>"
+    return f"<div class='top'><div class='word'>{esc(b['name'])}</div></div>"
 
 
 def foot_html(left=None):
     b = brand()
-    return f"<div class='foot'><div><b>{esc(left or 'Listen live')}</b><br>{esc(b['label'])}</div><div class='slogan'>{esc(b['slogan'])}</div></div>"
+    icon = "<div class='play go'></div>" if left and ("link" in left.lower() or "follow" in left.lower()) else "<div class='play'></div>"
+    return f"<div class='foot'><div class='cta'>{icon}<div><b>{esc(left or 'Listen live')}</b>{esc(b['label'])}</div></div><div class='slogan'>{esc(b['slogan'])}</div></div>"
+
+
+def chip_html(text):
+    return f"<div><span class='chip'><i></i>{esc(text)}</span></div>"
+
+
+def head_html(text, size=None):
+    """Headline with its last word picked out in the pillar colour."""
+    words = text.strip().split()
+    style = f" style='font-size:{size}px'" if size else ""
+    if 2 <= len(words) <= 9:
+        return f"<div class='head'{style}>{esc(' '.join(words[:-1]))} <em>{esc(words[-1])}</em></div>"
+    return f"<div class='head'{style}>{esc(text)}</div>"
 
 
 PILLAR_CHIP = {"music": "Rare Breed Sounds", "program": "Real Talk", "community": "Around town", "behind": "Behind the mic", "cta": "Join the breed", "manual": "Resofrik FM", "reminder": "Tonight"}
@@ -466,14 +529,16 @@ def card_html(post):
     if sub.strip().startswith(head.strip()[:20]):
         sub = sub[len(head) :].strip(" —-:.") if len(sub) > len(head) + 10 else ""
     sub = re.sub(r"\s*\(via [^)]*\)\s*$", "", sub).strip(" —-:")
+    if len(sub.split()) < 6:
+        sub = ""
     meta = ""
     if post.get("eventDate"):
         d = dt.date.fromisoformat(post["eventDate"])
         meta = f"{d.strftime('%a, %b')} {d.day}" + (f" · {post.get('place')}" if post.get("place") else "")
     if post.get("source"):
         meta = (meta + " · " if meta else "") + f"via {post['source']}"
-    body = f"""{top_html()}<div class='main'><div><span class='chip'>{esc(chip)}</span></div><div class='head'>{esc(head)}</div>{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}{f"<div class='sub'>{esc(first_words(sub, 40))}</div>" if sub else ""}</div>{foot_html('Details at the link' if post.get('kind') == 'community' else None)}"""
-    return page(body)
+    body = f"""{top_html()}<div class='main'>{chip_html(chip)}{head_html(head)}{stripe_html(b)}{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}{f"<div class='sub'>{esc(first_words(sub, 40))}</div>" if sub else ""}</div>{foot_html('Details at the link' if post.get('kind') == 'community' else None)}"""
+    return page(body, pillar=pillar)
 
 
 def render_card(post, out_dir):
@@ -484,8 +549,8 @@ def render_card(post, out_dir):
 
 def show_card_html(show):
     when = f"{DAY_PLURAL.get(show['day'], show['day'])} · {fmt12(show['start'])} ET"
-    body = f"""{top_html()}<div class='main'><div><span class='chip'>On air</span></div><div class='head'>{esc(show['show'])}</div><div class='meta'>{esc(when)}</div><div class='sub'>{esc(show.get('description', ''))}</div></div>{foot_html()}"""
-    return page(body)
+    body = f"""{top_html()}<div class='main'>{chip_html('On air')}{head_html(show['show'])}{stripe_html(brand())}<div class='meta'>{esc(when)}</div><div class='sub'>{esc(show.get('description', ''))}</div></div>{foot_html('Tune in')}"""
+    return page(body, pillar='reminder')
 
 
 DAY_PLURAL = {"Sun": "Sundays", "Mon": "Mondays", "Tue": "Tuesdays", "Wed": "Wednesdays", "Thu": "Thursdays", "Fri": "Fridays", "Sat": "Saturdays"}
@@ -499,20 +564,20 @@ def fmt12(hhmm):
 # ---------------------------------------------------------------------------
 # Carousels
 # ---------------------------------------------------------------------------
-def slide_cover(title, kicker, sub=""):
-    return page(f"""{top_html()}<div class='main'><div><span class='chip'>{esc(kicker)}</span></div><div class='head' style='font-size:132px'>{esc(title)}</div>{f"<div class='sub'>{esc(sub)}</div>" if sub else ""}<div class='meta'>Swipe →</div></div>{foot_html()}""")
+def slide_cover(title, kicker, sub="", pillar="music"):
+    return page(f"""{top_html()}<div class='main'>{chip_html(kicker)}{head_html(title, 120)}{stripe_html(brand())}{f"<div class='sub'>{esc(sub)}</div>" if sub else ""}<div class='meta'>Swipe &rarr;</div></div>{foot_html()}""", pillar=pillar)
 
 
-def slide_item(n, title, meta, text, photo=""):
+def slide_item(n, title, meta, text, photo="", pillar="music"):
     ph = f"<img class='photo' src='{esc(photo)}' alt=''>" if photo else ""
     num_style = " style='font-size:120px'" if photo else ""
-    head_size = 76 if photo else 84
-    return page(f"""{top_html()}<div class='main' style='gap:26px'>{ph}<div class='num'{num_style}>{n:02d}</div><div class='head' style='font-size:{head_size}px'>{esc(title)}</div>{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}{f"<div class='sub'>{esc(first_words(text, 36))}</div>" if text else ""}</div>{foot_html()}""")
+    head_size = 64 if photo else 80
+    return page(f"""{top_html()}<div class='main' style='gap:24px'>{ph}<div class='num'{num_style}>{n:02d}</div><div class='head' style='font-size:{head_size}px'>{esc(title)}</div>{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}{f"<div class='sub'>{esc(first_words(text, 36))}</div>" if text else ""}</div>{foot_html()}""", pillar=pillar, motif=not photo)
 
 
 def slide_cta(line1, line2):
     b = brand()
-    return page(f"""{top_html()}<div class='main' style='align-items:flex-start'><div class='head' style='font-size:120px'>{esc(line1)}</div><div class='sub'>{esc(line2)}</div><div><span class='chip' style='font-size:34px;padding:16px 30px'>{esc(b['label'])}</span></div></div>{foot_html('Follow for more')}""")
+    return page(f"""{top_html()}<div class='main' style='align-items:flex-start'>{head_html(line1, 120)}{stripe_html(b)}<div class='sub'>{esc(line2)}</div><div><span class='chip' style='font-size:32px;padding:18px 32px;letter-spacing:1px;text-transform:none'>{esc(b['label'])} &rarr;</span></div></div>{foot_html('Follow for more')}""", pillar="cta")
 
 
 def render_slides(htmls, out_dir, tag):
@@ -554,9 +619,9 @@ def make_weekly(tasks, out_dir):
     made = 0
     shows = SETTINGS.get("schedule") or []
     if want.get("lineup", True) and shows:
-        slides = [slide_cover("This week on " + st["name"], "This week", "Music for a while, then a program or two.")]
+        slides = [slide_cover("This week on " + st["name"], "This week", "Music for a while, then a program or two.", pillar="program")]
         for i, s in enumerate(shows[:6], 1):
-            slides.append(slide_item(i, s["show"], f"{DAY_PLURAL.get(s['day'], s['day'])} · {fmt12(s['start'])} ET", s.get("description", "")))
+            slides.append(slide_item(i, s["show"], f"{DAY_PLURAL.get(s['day'], s['day'])} · {fmt12(s['start'])} ET", s.get("description", ""), pillar="program"))
         slides.append(slide_cta("Listen live", "Set a reminder and tune in."))
         files = render_slides(slides, out_dir, "lineup")
         tx = carousel_texts("lineup", [{"show": s["show"], "day": s["day"], "time": fmt12(s["start"]) + " ET"} for s in shows])
@@ -564,14 +629,14 @@ def make_weekly(tasks, out_dir):
         made += 1
     board = wk.get("board") or []
     if want.get("clevelandThisWeek", True) and len(board) >= 3:
-        slides = [slide_cover(f"Around {st['city']} this week", "Community", "Events and good news from our neighbors.")]
+        slides = [slide_cover(f"Around {st['city']} this week", "Community", "Events and good news from our neighbors.", pillar="community")]
         for i, it in enumerate(board[:5], 1):
             meta = ""
             if it.get("eventDate"):
                 d = dt.date.fromisoformat(it["eventDate"])
                 meta = f"{d.strftime('%a, %b')} {d.day}" + (f" · {it.get('place')}" if it.get("place") else "")
             meta = (meta + " · " if meta else "") + f"via {it.get('source', '')}"
-            slides.append(slide_item(i, it["title"], meta, it.get("summary", ""), it.get("image", "")))
+            slides.append(slide_item(i, it["title"], meta, it.get("summary", ""), "", pillar="community"))  # no third-party photos: their copyright
         slides.append(slide_cta("Share your event", f"Nonprofits and community groups: send it to us at {st.get('linkLabel', '')}."))
         files = render_slides(slides, out_dir, "cleveland")
         urls = [upload(f) for f in files]
@@ -619,11 +684,11 @@ def probe(path):
 
 def overlay_png(title, out_png, kind="clip"):
     b = brand()
-    logo = f"<img src='{esc(b['logo'])}' style='height:96px;border-radius:16px'>" if b["logo"] else ""
+    logo = f"<img src='{esc(b['logo'])}' style='height:110px'>" if b["logo"] else ""
     doc = f"""<!doctype html><html><head><meta charset='utf-8'>{FONTS_LINK}<style>
-*{{margin:0;padding:0;box-sizing:border-box}}html,body{{width:{W}px;height:{H}px;background:transparent;overflow:hidden;font-family:Inter,'DejaVu Sans',sans-serif;color:#fff}}
+*{{margin:0;padding:0;box-sizing:border-box}}html,body{{width:{W}px;height:{H}px;background:transparent;overflow:hidden;font-family:{BODY};color:#fff}}
 .top{{position:absolute;top:0;left:0;right:0;height:300px;background:linear-gradient(#000c,#0000);padding:70px 64px;display:flex;gap:22px;align-items:center}}
-.name{{font-family:'Archivo Black',Inter,sans-serif;font-size:44px}}.t{{font-size:34px;color:{b['accent']};font-weight:800;margin-top:6px;max-width:820px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.name{{font-family:{DISPLAY};font-weight:800;font-size:44px}}.t{{font-size:34px;color:{b['accent']};font-weight:800;margin-top:6px;max-width:820px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
 .bot{{position:absolute;bottom:0;left:0;right:0;height:300px;background:linear-gradient(#0000,#000d);display:flex;align-items:flex-end;justify-content:space-between;padding:0 64px 86px}}
 .cta{{background:{b['accent']};color:#111;font-weight:800;font-size:36px;padding:16px 28px;border-radius:999px}}.sl{{font-style:italic;font-size:32px;color:#eee}}
 </style></head><body><div class='top'>{logo}<div><div class='name'>{esc(b['name'])}</div><div class='t'>{esc(title)}</div></div></div>
