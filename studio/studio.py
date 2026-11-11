@@ -35,8 +35,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-API = os.environ.get("AUTOPILOT_URL", "").rstrip("/")
-TOKEN = os.environ.get("STUDIO_TOKEN", "")
+API = os.environ.get("AUTOPILOT_URL", "").strip().rstrip("/")
+TOKEN = os.environ.get("STUDIO_TOKEN", "").strip()
 AI_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 WORK = Path(os.environ.get("STUDIO_WORK", tempfile.gettempdir())) / "resofrik-studio"
 CHROME = os.environ.get("CHROME") or shutil.which("google-chrome") or shutil.which("google-chrome-stable") or shutil.which("chromium") or shutil.which("chromium-browser")
