@@ -191,18 +191,20 @@ async function kvPut(env, k, v, ttlSec) {
 }
 // FB_PAGE_TOKEN may be a (long-lived) user token: swap it once for the Page's own token, which never expires, and keep it.
 async function withPageToken(env) {
-  const src = String(env.FB_PAGE_TOKEN || "").trim();
+  const src = String(env.FB_PAGE_TOKEN || "").replace(/\s+/g, "");
   if (!src || !env.FB_PAGE_ID || !env.DB) return env;
-  const key = "pagetok:" + src.slice(-24);
+  const key = "pagetok2:" + src.slice(-24);
   let tok = await kvGet(env, key);
   if (!tok) {
     tok = src;
     try {
       const r = await xfetch(`${graph(env)}/${env.FB_PAGE_ID}?fields=access_token&access_token=${encodeURIComponent(src)}`);
       const d = await r.json();
-      if (d && d.access_token) tok = d.access_token;
+      if (d && d.access_token) {
+        tok = d.access_token;
+        await kvPut(env, key, tok);
+      }
     } catch {}
-    await kvPut(env, key, tok);
   }
   return { ...env, FB_PAGE_TOKEN: tok };
 }
