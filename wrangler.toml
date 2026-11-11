@@ -10,6 +10,8 @@ crons = ["*/15 * * * *", "0 22 * * 6"]
 
 [vars]
 PUBLIC_URL = "https://resofrik-autopilot.resofrikfm.workers.dev"
+# Settings that are not secret live here (dashboard-only variables are wiped on each deploy)
+BLUESKY_HANDLE = "resofrikfm.bsky.social"
 
 [[d1_databases]]
 binding = "DB"
