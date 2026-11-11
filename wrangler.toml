@@ -16,11 +16,10 @@ binding = "DB"
 database_name = "resofrik-autopilot"
 database_id = "fe565770-7278-410c-a69f-8b1e55505be5"
 
-# Media storage for pictures and videos. Turn R2 on in Cloudflare, create the bucket
-# "resofrik-media", then remove the # from the next three lines.
-# [[r2_buckets]]
-# binding = "MEDIA"
-# bucket_name = "resofrik-media"
+# Media storage for pictures and videos
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "resofrik-media"
 
 [observability]
 enabled = true
