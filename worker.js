@@ -2068,6 +2068,7 @@ async function handleAction(request, env) {
     const time = form.get("time");
     if (isValidDate(date) && isValidTime(time)) post.when = zonedToUtc(date, time, tz);
   } else if (act === "post_now") {
+    post.when = Date.now(); // so anything still processing is finished by the next check
     await publishPost(env, settings, post);
     await savePost(env, post);
     await reportPost(env, settings, post);
