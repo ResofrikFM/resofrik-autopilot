@@ -1,0 +1,73 @@
+name: Studio
+
+# Secrets needed (repo → Settings → Secrets and variables → Actions):
+#   AUTOPILOT_URL   your Worker address, e.g. https://resofrik-autopilot.<you>.workers.dev
+#   STUDIO_TOKEN    the same long random text you gave the Worker
+#   ANTHROPIC_API_KEY  (optional) for AI captions, summaries and clip picking
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"   # scout: local news and events every 4 hours
+    - cron: "40 23 * * *"    # studio: cards, carousels, videos, shorts every evening
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "scout, make or all"
+        default: "all"
+
+concurrency:
+  group: studio
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  studio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core >/dev/null
+          pip install -q -r studio/requirements.txt
+
+      - name: Cache speech model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-small-v1
+
+      - name: Run
+        env:
+          AUTOPILOT_URL: ${{ secrets.AUTOPILOT_URL }}
+          STUDIO_TOKEN: ${{ secrets.STUDIO_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          TASK="${{ github.event.inputs.task }}"
+          if [ -z "$TASK" ]; then
+            if [ "${{ github.event.schedule }}" = "17 */4 * * *" ]; then TASK=scout; else TASK=all; fi
+          fi
+          python studio/studio.py "$TASK"
+
+      - name: Update the website's community board
+        if: always()
+        env:
+          AUTOPILOT_URL: ${{ secrets.AUTOPILOT_URL }}
+          STUDIO_TOKEN: ${{ secrets.STUDIO_TOKEN }}
+        run: |
+          python studio/studio.py sync-site --file content/events.json || exit 0
+          if ! git diff --quiet -- content/events.json; then
+            git config user.name "Resofrik Autopilot"
+            git config user.email "autopilot@users.noreply.github.com"
+            git add content/events.json
+            git commit -m "Community board: automatic update"
+            git push
+          fi
