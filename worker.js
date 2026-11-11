@@ -1545,7 +1545,8 @@ function json(o, status = 200, extra = {}) {
 
 async function handleStudio(request, env, url) {
   const auth = request.headers.get("authorization") || "";
-  if (!env.STUDIO_TOKEN || auth !== "Bearer " + env.STUDIO_TOKEN) return json({ error: "unauthorized" }, 401);
+  const want = String(env.STUDIO_TOKEN || "").trim();
+  if (!want || auth.replace(/^Bearer\s+/i, "").trim() !== want) return json({ error: "unauthorized" }, 401);
   const settings = await loadSettings(env);
   const tz = settings.station.timezone;
   const path = url.pathname.replace("/api/studio/", "");
@@ -1846,7 +1847,7 @@ async function handleHttp(request, env, ctx) {
   if (!env.ADMIN_PASSWORD) return html(page("Setup needed", `<main><section><p>Add a secret named <b>ADMIN_PASSWORD</b> to this Worker, then reload.</p></section></main>`));
   if (p === "/login" && request.method === "POST") {
     const form = await request.formData();
-    if (form.get("password") === env.ADMIN_PASSWORD) return redirect("/", { "set-cookie": `rp=${await sessionToken(env)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000` });
+    if (String(form.get("password") || "").trim() === String(env.ADMIN_PASSWORD).trim()) return redirect("/", { "set-cookie": `rp=${await sessionToken(env)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000` });
     return html(loginPage("Wrong password. Try again."), 401);
   }
   if (p === "/logout") return redirect("/", { "set-cookie": "rp=; Path=/; Max-Age=0" });
