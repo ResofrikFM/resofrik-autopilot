@@ -875,8 +875,9 @@ function communityPost(settings, it, when, status) {
     long,
     link: it.url,
     linkExternal: true,
-    media: it.image ? { type: "image", urls: [it.image] } : { type: "none", urls: [] },
-    needsImage: !it.image,
+    // never repost a source's own photo (their copyright): the Studio makes a branded card instead
+    media: { type: "none", urls: [] },
+    needsImage: true,
     platforms: settings.community.platforms,
     results: {},
     createdAt: Date.now(),
@@ -1909,6 +1910,28 @@ async function handleAction(request, env) {
     const r = await tick(env);
     return back(r.paused ? "Autopilot is paused." : `Ran now: ${r.published} published, ${r.reminders} reminders, ${r.community} community posts scheduled, ${r.inbox} new comments.`);
   }
+  if (act === "restyle") {
+    // redo pictures in the current look: upcoming cards and community photos are re-made, this week's carousels rebuilt
+    const ups = await queryPosts(env, "WHERE when_ms >= ? AND status IN ('scheduled','needs_review','approved') ORDER BY when_ms LIMIT 200", Date.now());
+    let cards = 0, removed = 0;
+    for (const p of ups) {
+      const urls = p.media.urls || [];
+      if (p.kind === "carousel" || p.kind === "slideshow") {
+        await deletePost(env, p.id);
+        removed++;
+      } else if ((p.media.type === "image" && urls.length && urls.every((u) => /-card-/.test(u))) || (p.kind === "community" && p.media.type !== "video")) {
+        p.media = { type: "none", urls: [] };
+        p.needsImage = true;
+        await savePost(env, p);
+        cards++;
+      }
+    }
+    const wk = await kvJson(env, "studio:weekly", null);
+    if (wk) await kvDel(env, "carousels:" + wk.monday);
+    await kvDel(env, "showcards");
+    const started = await dispatchStudio(env);
+    return back(`${cards} pictures and ${removed} carousels will be re-made in the current look. ` + (started ? "Studio started." : "Run the Studio (GitHub → Actions → Studio) to make them."));
+  }
   if (act === "studio_now") {
     return back((await dispatchStudio(env)) ? "Studio started. New pictures, clips and carousels appear here in 5–30 minutes." : "Couldn't start the Studio from here. Add GH_DISPATCH_TOKEN and GH_REPO, or run it from GitHub → Actions → Studio → Run workflow.");
   }
@@ -2163,7 +2186,7 @@ ${p.status === "skipped" ? `<button class="ghost" name="do" value="restore">Put 
 ${alerts.map((a) => `<div class="alert">${a}</div>`).join("")}
 <form method="post" action="/action" class="row" style="margin-top:12px">${settings.paused ? `<button name="do" value="resume">Resume autopilot</button>` : `<button class="ghost" name="do" value="pause">Pause everything</button>`}
 <button class="ghost" name="do" value="generate" onclick="return confirm('Write a fresh set of posts for next week? Unposted weekly posts for that week will be replaced.')">Write next week now</button>
-<button class="ghost" name="do" value="studio_now">Run the Studio now</button><button class="ghost" name="do" value="tick">Run a check now</button></form>
+<button class="ghost" name="do" value="studio_now">Run the Studio now</button><button class="ghost" name="do" value="restyle" onclick="return confirm('Re-make all upcoming pictures and this week\\'s carousels in the current look?')">Redo pictures</button><button class="ghost" name="do" value="tick">Run a check now</button></form>
 <p class="small">Last check: ${lastTick ? esc(fmtLocal(lastTick, tz)) : "never"}. The writer runs Saturday evenings, the publisher every 15 minutes, the scout every 4 hours, the Studio every evening.</p></section>
 
 <section id="queue"><h2>Coming up</h2>${upcoming.length ? upcoming.slice(0, 10).map((p) => postCard(p, true)).join("") + (upcoming.length > 10 ? `<details><summary>Show ${upcoming.length - 10} more</summary>${upcoming.slice(10).map((p) => postCard(p, true)).join("")}</details>` : "") : `<p class="small">Nothing queued yet. Press “Write next week now”.</p>`}</section>
