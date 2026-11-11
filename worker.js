@@ -22,6 +22,7 @@ const WEEKLY_CRON = "0 22 * * 6";
 
 // Free plan allows 50 outside requests per run. We count ours and stop early, finishing next run.
 let SUBREQ = 0;
+let MEDIA_ENV = null; // lets fetchBytes read our own /m/ files straight from R2 (a Worker cannot fetch its own workers.dev URL)
 const BUDGET = 40;
 function resetBudget() {
   SUBREQ = 0;
@@ -131,6 +132,7 @@ const DEFAULT_SETTINGS = {
 // ---------------------------------------------------------------------------
 export default {
   async fetch(request, env, ctx) {
+    MEDIA_ENV = env;
     resetBudget();
     try {
       await ensureSchema(env);
@@ -145,6 +147,7 @@ export default {
 };
 
 async function runScheduled(cron, env) {
+  MEDIA_ENV = env;
   resetBudget();
   await ensureSchema(env);
   if (cron === WEEKLY_CRON) await weeklyJob(env, { force: false });
@@ -1245,6 +1248,20 @@ async function graphPost(url, params) {
   return d;
 }
 async function fetchBytes(url, max) {
+  try {
+    const u = new URL(url);
+    const own = MEDIA_ENV && MEDIA_ENV.MEDIA && u.pathname.startsWith("/m/") && (u.hostname.endsWith(".workers.dev") || (MEDIA_ENV.PUBLIC_URL && new URL(MEDIA_ENV.PUBLIC_URL).hostname === u.hostname));
+    if (own) {
+      const obj = await MEDIA_ENV.MEDIA.get(decodeURIComponent(u.pathname.slice(3)));
+      if (obj) {
+        const buf = await obj.arrayBuffer();
+        if (max && buf.byteLength > max) throw new Error(`media too large (${Math.round(buf.byteLength / 1e6)} MB)`);
+        return { buf, type: (obj.httpMetadata && obj.httpMetadata.contentType) || "application/octet-stream" };
+      }
+    }
+  } catch (e) {
+    if (/too large/.test(String(e && e.message))) throw e;
+  }
   const res = await xfetch(url);
   if (!res.ok) throw new Error(`couldn't load media (${res.status})`);
   const buf = await res.arrayBuffer();
