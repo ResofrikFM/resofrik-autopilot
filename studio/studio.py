@@ -942,7 +942,7 @@ def make():
     SETTINGS = tasks["settings"]
     out_dir = WORK / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
-    done = {"cards": 0, "showcards": 0, "carousels": 0, "promos": 0, "jobs": 0}
+    done = {"cards": 0, "showcards": 0, "carousels": 0, "promos": 0, "stories": 0, "jobs": 0}
     for c in tasks.get("cards", [])[:45]:
         try:
             url = upload(render_card(c, out_dir))
@@ -962,6 +962,10 @@ def make():
         done["carousels"] = make_weekly(tasks, out_dir)
     except Exception as e:
         say("weekly carousels failed:", e)
+    try:
+        done["stories"] = make_stories(tasks, out_dir)
+    except Exception as e:
+        say("stories failed:", e)
     st = SETTINGS["station"]
     for a in tasks.get("artistPromos", []):
         try:
@@ -984,6 +988,147 @@ def make():
     say("make:", done)
     return done
 
+
+
+# ---------------------------------------------------------------------------
+# Rare Breed Stories: short, fact-checked artist stories as vertical videos
+# ---------------------------------------------------------------------------
+STORIES_FILE = Path(__file__).resolve().parent / "stories.json"
+STORY_CSS = """
+.main{top:430px;bottom:360px;gap:34px}
+.prog{position:absolute;left:72px;right:72px;top:40px;display:flex;gap:10px;z-index:3}
+.prog span{flex:1;height:8px;border-radius:8px;background:rgba(255,255,255,.18)}
+.prog span.on{background:var(--tone)}
+.top{top:76px}
+.kick{font-weight:800;font-size:30px;letter-spacing:4px;text-transform:uppercase;color:var(--tone)}
+.beat{font-family:%s;font-weight:800;font-size:76px;line-height:1.18;letter-spacing:-.5px;text-wrap:balance}
+.who{font-size:40px;color:#b4b0a8;font-weight:600}
+.src{position:absolute;left:72px;right:72px;bottom:190px;font-size:26px;color:#8d877d}
+"""
+
+
+def story_frame(story, i, n, kind, text):
+    b = brand()
+    prog = "<div class='prog'>" + "".join(f"<span class='{'on' if k <= i else ''}'></span>" for k in range(n)) + "</div>"
+    if kind == "hook":
+        inner = f"{chip_html('Rare Breed Stories')}<div class='kick'>{esc(story['genre'])}</div>{head_html(text, 104)}{stripe_html(b)}<div class='who'>{esc(story['artist'])}</div>"
+    elif kind == "end":
+        inner = f"<div class='kick'>Your turn</div><div class='head' style='font-size:92px'>{esc(text)}</div>{stripe_html(b)}<div class='who'>Tell us in the comments. Follow for more Rare Breed Stories.</div>"
+    else:
+        inner = f"<div class='kick'>{esc(story['artist'])}</div><div class='head beat'>{esc(text)}</div>"
+    src = f"<div class='src'>Source: {esc(story['source']['name'])}</div>" if kind == "end" else ""
+    body = f"{prog}{top_html()}<div class='main'>{inner}</div>{src}{foot_html('Listen live')}"
+    return page(body, W, H, STORY_CSS % DISPLAY, pillar={"reggae": "community", "hiphop": "behind", "jazz": "program"}.get(story.get("music", ""), "music"))
+
+
+def story_frames(story):
+    parts = [("hook", story["hook"])] + [("beat", t) for t in story["beats"]] + [("beat", story["payoff"]), ("end", story["question"])]
+    return [(k, t, story_frame(story, i, len(parts), k, t)) for i, (k, t) in enumerate(parts)]
+
+
+def read_time(text, kind):
+    words = len(text.split())
+    return round(min(6.5, max(3.2, 1.2 + words * 0.32)) + (0.6 if kind == "hook" else 0) + (1.0 if kind == "end" else 0), 2)
+
+
+def story_video(story, music_url, out_dir):
+    out_dir = Path(out_dir)
+    frames = story_frames(story)
+    segs, total = [], 0.0
+    for i, (kind, text, html_doc) in enumerate(frames):
+        png = out_dir / f"st-{story['id']}-{i}.png"
+        chrome_shot(html_doc, W, H, str(png))
+        d = read_time(text, kind)
+        total += d
+        seg = out_dir / f"st-{story['id']}-{i}.mp4"
+        nfr = int(d * 30)
+        z = "min(zoom+0.0006,1.05)" if i % 2 == 0 else "if(eq(on,1),1.05,max(zoom-0.0006,1))"
+        fc = f"[0:v]scale=1350:-2,zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={nfr}:s={W}x{H}:fps=30,fade=t=in:st=0:d=0.25,format=yuv420p[v]"
+        ff("-loop", "1", "-t", f"{d}", "-i", png, "-filter_complex", fc, "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-r", "30", "-t", f"{d}", seg)
+        segs.append(seg)
+    lst = out_dir / f"st-{story['id']}.txt"
+    lst.write_text("".join(f"file '{s.resolve()}'\n" for s in segs))
+    silent = out_dir / f"st-{story['id']}-v.mp4"
+    ff("-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", silent)
+    out = out_dir / f"story-{story['id']}.mp4"
+    fade = f"afade=t=in:st=0:d=1,afade=t=out:st={max(total - 2.5, 0):.2f}:d=2.5,loudnorm=I=-16:TP=-1.5:LRA=11"
+    if music_url:
+        audio = out_dir / f"music-{hashlib.sha1(music_url.encode()).hexdigest()[:10]}"
+        if not audio.exists():
+            raw, _ = http(music_url)
+            audio.write_bytes(raw)
+        ff("-i", silent, "-stream_loop", "-1", "-i", audio, "-filter_complex", f"[1:a]atrim=0:{total:.2f},asetpts=PTS-STARTPTS,{fade}[a]", "-map", "0:v", "-map", "[a]", *X264, "-t", f"{total:.2f}", out)
+    else:
+        ff("-i", silent, "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-map", "0:v", "-map", "1:a", *X264, "-t", f"{total:.2f}", out)
+    return out, total
+
+
+def story_captions(story):
+    tags = " ".join(story.get("tags", [])[:4] + ["#RareBreedStories", "#ResofrikFM"])
+    full = " ".join(story["beats"]) + " " + story["payoff"]
+    src = f"Source: {story['source']['name']}"
+    return {
+        "instagram": f"{story['hook']}\n\n{full}\n\n{story['question']} 👇\n\nFollow for more Rare Breed Stories. Listen live: link in bio.\n\n{src}\n\n{tags} #MusicHistory #BlackMusic",
+        "facebook": f"{story['hook']}\n\n{full}\n\n{story['question']} Tell us in the comments.\n\n{src}",
+        "threads": f"{story['hook']}\n\n{story['payoff']}\n\n{story['question']}",
+        "bluesky": f"{story['hook']} {story['payoff']}\n\n{story['question']}",
+        "mastodon": f"{story['hook']}\n\n{story['payoff']}\n\n{story['question']}\n\n{' '.join(story.get('tags', [])[:3])}",
+        "telegram": f"{story['hook']}\n\n{full}\n\n{story['question']}\n\n{src}",
+        "tiktok": f"{story['hook']} {story['question']} {tags} #fyp",
+    }
+
+
+def pick_track(music, want):
+    if not music:
+        return ""
+    family = {"afrobeats": ["afrobeats", "african"], "african": ["african", "afrobeats"], "jazz": ["jazz", "soul"], "soul": ["soul", "jazz"], "reggae": ["reggae"], "hiphop": ["hiphop"]}.get(want, [want])
+    for g in family:
+        pool = [m for m in music if m.get("genre") == g]
+        if pool:
+            return random.choice(pool)["url"]
+    return random.choice(music)["url"]
+
+
+def make_stories(tasks, out_dir):
+    plan = tasks.get("stories")
+    if not plan or not STORIES_FILE.exists():
+        return 0
+    bank = json.loads(STORIES_FILE.read_text(encoding="utf-8"))
+    used = set(plan.get("used") or [])
+    left = [s for s in bank if s["id"] not in used]
+    try:
+        api("stories-left", {"left": len(left), "total": len(bank)})
+    except Exception as e:
+        say("stories-left failed:", e)
+    if not plan.get("music"):
+        say("stories: waiting for music; upload tracks under Music library in the panel")
+        return 0
+    days = plan.get("days") or ["Tue", "Fri"]
+    taken = set(plan.get("takenDates") or [])
+    tz_today = dt.date.fromisoformat(plan["today"]) if plan.get("today") else dt.date.today()
+    slots = []
+    for k in range(1, 9):
+        d = tz_today + dt.timedelta(days=k)
+        if d.strftime("%a") in days and d.isoformat() not in taken:
+            slots.append(d.isoformat())
+    made, last_music = 0, None
+    for date in slots[:2]:
+        if not left:
+            break
+        story = next((s for s in left if s.get("music") != last_music), left[0])
+        left.remove(story)
+        try:
+            mp4, secs = story_video(story, pick_track(plan.get("music") or [], story.get("music", "")), out_dir)
+            caps = story_captions(story)
+            api("post", {"kind": "story", "pillar": "music", "headline": story["artist"], "short": caps["bluesky"], "long": caps["facebook"], "variants": caps,
+                         "media": {"type": "video", "urls": [upload(mp4)]}, "whenLocal": {"date": date, "time": plan.get("time", "19:30")}, "platforms": plan.get("platforms")})
+            api("story-used", {"id": story["id"]})
+            last_music = story.get("music")
+            made += 1
+            say(f"story: {story['artist']} ({secs:.0f}s) for {date}")
+        except Exception as e:
+            say("story failed:", story.get("id"), e)
+    return made
 
 def sync_site(path):
     raw, _ = http(f"{API}/api/public/events")
