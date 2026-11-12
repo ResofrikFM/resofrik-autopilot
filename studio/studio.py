@@ -1006,6 +1006,14 @@ def make():
             done["cards"] += 1
         except Exception as e:
             say("card failed:", c.get("id"), e)
+    for ep in tasks.get("transcribe", [])[:6]:
+        try:
+            vid = download(ep["video"], out_dir / f"ep-{ep['id']}.mp4")
+            segs, _ = transcribe(vid)
+            api("episode-transcript", {"id": ep["id"], "text": " ".join(x["text"] for x in segs)})
+            done["transcripts"] = done.get("transcripts", 0) + 1
+        except Exception as e:
+            say("transcript failed:", ep.get("id"), e)
     for song in tasks.get("nowPlayingCards", [])[:12]:
         try:
             png = out_dir / f"np-{hashlib.sha1(song['track'].encode()).hexdigest()[:10]}.png"
