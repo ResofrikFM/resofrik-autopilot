@@ -89,6 +89,7 @@ const DEFAULT_SETTINGS = {
     quietHours: ["00:00", "07:00"],
     ignoreWords: ["Resofrik", "station id", "jingle", "promo", "sweeper", "advert", "commercial", "unknown"],
     platforms: ["bluesky", "threads", "mastodon", "telegram"],
+    requireCard: true, // only post songs the Studio has already made a picture card for
   },
   community: {
     enabled: true,
@@ -483,30 +484,65 @@ function buildReminderPost(settings, show, tag, now, card) {
 // ---------------------------------------------------------------------------
 async function nowPlaying(env, settings, now) {
   const np = settings.nowPlaying;
-  if (!np.enabled || !np.url || inQuietHours(now, settings) || budgetLeft() < 10) return 0;
+  if (!np.enabled || !np.url || budgetLeft() < 10) return 0;
   const tz = settings.station.timezone;
+  const res = await xfetch(np.url, { headers: { "user-agent": "ResofrikAutopilot/2" } });
+  if (!res.ok) throw new Error(`stream status ${res.status}`);
+  const body = await res.text();
+  const track = parseNowPlaying(body);
+  if (!track) return 0;
+  const songs = parseSongs(body);
+  if (songs.length) await rememberSongs(env, np, songs); // the Studio makes a picture card for each new song
+  if (inQuietHours(now, settings)) return 0;
   const state = await kvJson(env, "np:state", {});
   const today = zoneParts(now, tz).date;
   const countToday = state.date === today ? state.count || 0 : 0;
   if (countToday >= (np.maxPerDay || 4)) return 0;
   if (state.lastAt && now - state.lastAt < (np.minGapMinutes || 150) * 60000) return 0;
-  const res = await xfetch(np.url, { headers: { "user-agent": "ResofrikAutopilot/2" } });
-  if (!res.ok) throw new Error(`stream status ${res.status}`);
-  const track = parseNowPlaying(await res.text());
-  if (!track) return 0;
   const lower = track.toLowerCase();
   if ((np.ignoreWords || []).some((w) => w && lower.includes(w.toLowerCase()))) return 0;
   if (track === state.lastTrack) return 0;
+  const cards = await kvJson(env, "np:cards", {});
+  const card = cards[track] || "";
+  if (np.requireCard !== false && (!card || !songs.length || !songs[0].artist)) return 0; // wait for a song with artist, title and its card
   const st = settings.station;
   const artist = matchArtist(settings, track);
-  let text = [`Now playing on ${st.name}: ${track}`, `On the air right now: ${track}. ${st.slogan}.`, `${track} — playing now on ${st.name}.`][countToday % 3];
+  let text = [`Now playing on ${st.name}: ${track} 🎶`, `On the air right now: ${track}. ${st.slogan}.`, `${track}, playing now on ${st.name}. Tune in 📻`][countToday % 3];
   if (artist && artist.city) text += ` (from ${artist.city})`;
-  const post = normalizePost({ id: newId(), kind: "now-playing", when: now, status: "scheduled", pillar: "music", short: text, long: text, link: st.listenUrl, media: { type: "none", urls: [] }, platforms: np.platforms, results: {}, createdAt: now });
+  const post = normalizePost({ id: newId(), kind: "now-playing", when: now, status: "scheduled", pillar: "music", short: text, long: text, link: st.listenUrl, media: card ? { type: "image", urls: [card] } : { type: "none", urls: [] }, platforms: np.platforms, results: {}, createdAt: now });
   await publishPost(env, settings, post);
   await savePost(env, post);
   await reportPost(env, settings, post);
   await kvPut(env, "np:state", JSON.stringify({ date: today, count: countToday + 1, lastAt: now, lastTrack: track }));
   return 1;
+}
+function parseSongs(body) {
+  // AzuraCast: the song on air now, the next one and the last few, with their artwork
+  let j = null;
+  try {
+    j = JSON.parse(body);
+  } catch {
+    return [];
+  }
+  const az = Array.isArray(j) ? j[0] : j;
+  if (!az || !az.now_playing) return [];
+  const clean = (x) => String(x || "").replace(/\s+/g, " ").trim();
+  const list = [az.now_playing, az.playing_next, ...(az.song_history || [])].filter((x) => x && x.song);
+  return list
+    .map((x) => ({ artist: clean(x.song.artist), title: clean(x.song.title || x.song.text), art: /^https:\/\/.+\.(jpe?g|png|webp)$/i.test(x.song.art || "") ? x.song.art : "" }))
+    .filter((x) => x.title)
+    .map((x) => ({ ...x, track: x.artist ? `${x.artist} – ${x.title}` : x.title }));
+}
+async function rememberSongs(env, np, songs) {
+  const seen = await kvJson(env, "np:seen", []);
+  const ign = (np.ignoreWords || []).map((w) => w.toLowerCase()).filter(Boolean);
+  let changed = false;
+  for (const s of songs) {
+    if (!s.artist || seen.some((x) => x.track === s.track) || ign.some((w) => s.track.toLowerCase().includes(w))) continue;
+    seen.push(s);
+    changed = true;
+  }
+  if (changed) await kvPut(env, "np:seen", JSON.stringify(seen.slice(-300)));
 }
 
 function parseNowPlaying(body) {
@@ -1620,6 +1656,8 @@ async function handleStudio(request, env, url) {
       seenFeedEntries: await kvJson(env, "feeds:seen", []),
       stories: settings.studio.stories && settings.studio.stories.enabled === false ? null : await storyPlan(env, settings, now),
       photos: (await listPhotos(env)).map(({ url, tag, about, credit }) => ({ url, tag, about, credit })),
+      transcribe: (await loadEpisodes(env)).filter((e) => e.video && !e.transcript).slice(0, 6).map((e) => ({ id: episodeId(e), video: e.video, poet: e.poet, title: e.title })),
+      nowPlayingCards: settings.nowPlaying.enabled ? await (async () => { const cards = await kvJson(env, "np:cards", {}); return (await kvJson(env, "np:seen", [])).filter((x) => !cards[x.track]).slice(-12); })() : [],
     });
   }
   if (path === "upload" && request.method === "POST") {
@@ -1656,6 +1694,21 @@ async function handleStudio(request, env, url) {
     post.media = { type: body.type || "image", urls: body.urls || [] };
     post.needsImage = false;
     await savePost(env, post);
+    return json({ ok: true });
+  }
+  if (path === "episode-transcript") {
+    const eps = await loadEpisodes(env);
+    const e = eps.find((x) => episodeId(x) === body.id);
+    if (e) {
+      e.transcript = String(body.text || "").slice(0, 20000) || "(no words found)";
+      await saveEpisodes(env, eps);
+    }
+    return json({ ok: !!e });
+  }
+  if (path === "npcard") {
+    const cards = await kvJson(env, "np:cards", {});
+    if (body.track && /^https:\/\//.test(body.url || "")) cards[body.track] = body.url;
+    await kvPut(env, "np:cards", JSON.stringify(cards));
     return json({ ok: true });
   }
   if (path === "showcard") {
@@ -1772,6 +1825,26 @@ ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
     st.brandColor,
     LINKS_CSS
   );
+}
+
+// ---- Original series episodes (videos hosted in our own storage) ----
+const SERIES_TITLE = { "cleveland-poetry-in-black-and-white": "Cleveland Poetry in Black and White", "cleveland-music-in-black-and-white": "Cleveland Music in Black and White" };
+const SERIES_CODES = { cpbw: "cleveland-poetry-in-black-and-white", cmbw: "cleveland-music-in-black-and-white" };
+function parseEpisodeName(name) {
+  // cpbw-s1-e01--Poet name--Poem title.mp4  (or .jpg for its picture)
+  const m = String(name || "").match(/^([a-z]+)-s(\d{1,2})-e(\d{1,3})--(.*?)--(.+)\.(mp4|m4v|mov|jpe?g|png|webp)$/i);
+  if (!m || !SERIES_CODES[m[1].toLowerCase()]) return null;
+  return { series: SERIES_CODES[m[1].toLowerCase()], season: +m[2], episode: +m[3], poet: m[4].trim(), title: m[5].trim(), kind: /^(mp4|m4v|mov)$/i.test(m[6]) ? "video" : "poster" };
+}
+async function loadEpisodes(env) {
+  return kvJson(env, "originals:eps", []);
+}
+async function saveEpisodes(env, eps) {
+  eps.sort((a, b) => a.series.localeCompare(b.series) || b.season - a.season || a.episode - b.episode);
+  await kvPut(env, "originals:eps", JSON.stringify(eps));
+}
+function episodeId(e) {
+  return `${e.series}-s${e.season}e${e.episode}`;
 }
 
 async function storyPlan(env, settings, now) {
@@ -1929,6 +2002,7 @@ async function handlePublic(request, env, url) {
   if (p === "/api/public/events") return json(await publicEvents(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p === "/api/public/media") return json(await publicMedia(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p === "/api/public/stories") return json(await publicStories(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
+  if (p === "/api/public/originals") return json((await loadEpisodes(env)).filter((e) => e.video && !e.hidden).map(({ transcript, hidden, ...e }) => e), 200, { ...CORS, "cache-control": "public, max-age=300" });
   if (p === "/api/public/artists") return json(publicArtists(settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p.startsWith("/api/public/click/")) {
     const [, , , , postId, platform] = p.split("/");
@@ -2044,6 +2118,24 @@ async function handleHttp(request, env, ctx) {
     const csv = "email,name,source,joined\n" + rows.map((r) => [r.email, r.name || "", r.source || "", new Date(r.created).toISOString().slice(0, 10)].map((x) => `"${String(x).replace(/"/g, '""')}"`).join(",")).join("\n");
     return new Response(csv, { headers: { "content-type": "text/csv", "content-disposition": "attachment; filename=resofrik-subscribers.csv" } });
   }
+  if (request.method === "POST" && p === "/upload-episode") {
+    const name = decodeURIComponent(url.searchParams.get("name") || "");
+    const info = parseEpisodeName(name);
+    if (!info) return json({ error: "Name the file like cpbw-s1-e01--Poet--Title.mp4" }, 400);
+    if (!env.MEDIA) return json({ error: "no media storage" }, 500);
+    const ext = name.split(".").pop().toLowerCase();
+    const key = `originals/${info.series}/s${info.season}e${String(info.episode).padStart(2, "0")}-${info.kind}.${ext}`;
+    await env.MEDIA.put(key, request.body, { httpMetadata: { contentType: request.headers.get("content-type") || (info.kind === "video" ? "video/mp4" : "image/jpeg") } });
+    const eps = await loadEpisodes(env);
+    let e = eps.find((x) => episodeId(x) === episodeId(info));
+    if (!e) eps.push((e = { series: info.series, season: info.season, episode: info.episode, poet: info.poet, title: info.title, description: "", video: "", poster: "", transcript: "" }));
+    if (!e.poet && info.poet !== "Poet") e.poet = info.poet;
+    if (!e.title) e.title = info.title;
+    e[info.kind] = `${origin(env, request)}/m/${key}`;
+    await saveEpisodes(env, eps);
+    return json({ ok: true, id: episodeId(e), kind: info.kind });
+  }
+  if (p === "/admin/episodes.json") return json(await loadEpisodes(env));
   if (request.method === "POST" && p === "/action") return handleAction(request, env);
   return html(await dashboard(env, url, request));
 }
@@ -2186,6 +2278,15 @@ async function handleAction(request, env) {
       await env.MEDIA.put(key, obj.body, { httpMetadata: obj.httpMetadata, customMetadata: meta });
     }
     return back(`Photo moved to ${PHOTO_TAGS[tag]}.`);
+  }
+  if (act === "episode_edit") {
+    const eps = await loadEpisodes(env);
+    const e = eps.find((x) => episodeId(x) === String(form.get("id")));
+    if (!e) return back("Unknown episode.");
+    for (const k of ["poet", "title", "description"]) if (form.get(k) != null) e[k] = String(form.get(k)).trim().slice(0, k === "description" ? 600 : 120);
+    if (form.get("hidden") != null) e.hidden = form.get("hidden") === "yes";
+    await saveEpisodes(env, eps);
+    return back(`Saved ${e.poet ? e.poet + " — " : ""}${e.title}.`);
   }
   if (act === "photo_approve") {
     const key = String(form.get("key") || "");
@@ -2383,6 +2484,7 @@ async function dashboard(env, url, request) {
   const music = await listMusic(env);
   const photos = await listPhotos(env);
   const pendingPhotos = await listPhotos(env, "photos-pending/");
+  const episodes = await loadEpisodes(env);
   const storyBank = await kvJson(env, "stories:left", null);
   const storiesUp = await queryPosts(env, "WHERE kind = 'story' AND when_ms >= ? AND status IN ('scheduled','approved','needs_review','processing') ORDER BY when_ms LIMIT 6", now);
 
@@ -2435,7 +2537,7 @@ ${p.status === "skipped" ? `<button class="ghost" name="do" value="restore">Put 
   const maxClicks = Math.max(1, ...stats.clicks.map((c) => c.n || 0));
   const body = `
 <header><b>${esc(settings.station.name)} Autopilot</b><span class="tag">${esc(settings.station.slogan)}</span><span class="pill ${settings.paused ? "bad" : "ok"}">${settings.paused ? "Paused" : "Running"}</span>
-<nav><a href="#queue">Queue</a><a href="#studio">Studio</a><a href="#photos">Photos</a><a href="#community">Community</a><a href="#inbox">Inbox${inbox.length ? ` (${inbox.length})` : ""}</a><a href="#results">Results</a><a href="#conn">Connections</a><a href="#settings">Settings</a><a href="/links" target="_blank">Link page ↗</a><a href="/logout">Sign out</a></nav></header>
+<nav><a href="#queue">Queue</a><a href="#studio">Studio</a><a href="#photos">Photos</a><a href="#series">Series</a><a href="#community">Community</a><a href="#inbox">Inbox${inbox.length ? ` (${inbox.length})` : ""}</a><a href="#results">Results</a><a href="#conn">Connections</a><a href="#settings">Settings</a><a href="/links" target="_blank">Link page ↗</a><a href="/logout">Sign out</a></nav></header>
 <main>${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
 <section><h2>At a glance</h2><div class="grid3">
 <div class="stat"><b>${upcoming.filter((p) => p.status !== "skipped").length}</b>posts queued</div><div class="stat"><b>${stats.published}</b>posted this week</div><div class="stat"><b>${stats.totalClicks}</b>link clicks this week</div>
@@ -2470,6 +2572,32 @@ ${Object.entries(PHOTO_TAGS).map(([t, label]) => { const list = photos.filter((p
 <h3>Add photos</h3>
 <form method="post" action="/action" enctype="multipart/form-data"><input type="hidden" name="anchor" value="photos"><input type="file" name="file" accept="image/jpeg,image/png,image/webp" multiple required><div class="grid3"><select name="tag">${Object.entries(PHOTO_TAGS).map(([t, label]) => `<option value="${t}">${esc(label)}</option>`).join("")}</select><input name="about" placeholder="Who or what is in them (e.g. a show or artist name)"><input name="credit" placeholder="Photo credit (optional)"></div><p class="small">Up to 60 photos at a time, 25 MB each. Tip: name the show or artist in “Who or what” so the Studio can match photos to the right show reminder or artist post.</p><p><button name="do" value="photo_upload">Add to photo library</button></p></form>
 <p class="small">Artists can send their own photos here: <a href="/send-photos" target="_blank">${esc(origin(env, request))}/send-photos</a> (share this link with them). You approve each one first.</p></section>
+
+<section id="series"><h2>Original series: episodes (${episodes.length})</h2>
+<p class="small">Episodes uploaded here play on the website's series pages (from our own storage, no YouTube needed). Name each file like <code>cpbw-s1-e01--Poet--Title.mp4</code>, with a matching <code>.jpg</code> for its picture (cpbw = Cleveland Poetry in Black and White, cmbw = Cleveland Music in Black and White). The Studio listens to each new episode and writes down the words, so a description can be written from them.</p>
+${episodes.map((e) => `<details class="post"><summary><b>${esc(SERIES_TITLE[e.series] || e.series)} · S${e.season} E${e.episode}</b> — ${esc(e.poet || "?")}: ${esc(e.title)} ${e.video ? "" : `<span class="pill warn">no video yet</span>`}${e.description ? "" : ` <span class="pill">no description</span>`}${e.hidden ? ` <span class="pill">hidden</span>` : ""}</summary>${e.poster ? `<img src="${esc(e.poster)}" alt="" style="max-width:260px;border-radius:8px">` : ""}<form method="post" action="/action"><input type="hidden" name="anchor" value="series"><input type="hidden" name="id" value="${esc(episodeId(e))}"><div class="grid2"><input name="poet" value="${esc(e.poet)}" placeholder="Poet / artist"><input name="title" value="${esc(e.title)}" placeholder="Title"></div><textarea name="description" maxlength="600" placeholder="Short description for the website">${esc(e.description)}</textarea><p><select name="hidden"><option value="no">Show on the website</option><option value="yes"${e.hidden ? " selected" : ""}>Hide from the website</option></select> <button name="do" value="episode_edit">Save</button></p></form>${e.transcript ? `<details><summary class="small">Words (from the Studio)</summary><p class="small">${esc(e.transcript)}</p></details>` : `<p class="small">${e.video ? "The Studio will write down the words on its next run." : ""}</p>`}</details>`).join("")}
+<h3>Upload episodes</h3>
+<p class="small">Pick all the videos and pictures at once (each file up to 95 MB). They upload one by one; keep this page open until it says done.</p>
+<input type="file" id="epFiles" accept="video/mp4,video/quicktime,image/jpeg,image/png,image/webp" multiple> <button type="button" id="epGo">Upload episodes</button>
+<p class="small" id="epStatus"></p>
+<script>
+document.getElementById("epGo").onclick = async () => {
+  const files = [...document.getElementById("epFiles").files], st = document.getElementById("epStatus");
+  if (!files.length) { st.textContent = "Choose the files first."; return; }
+  let ok = 0, bad = [];
+  for (const [i, f] of files.entries()) {
+    st.textContent = "Uploading " + (i + 1) + " of " + files.length + ": " + f.name + " …";
+    if (f.size > 95e6) { bad.push(f.name + " (over 95 MB)"); continue; }
+    try {
+      const r = await fetch("/upload-episode?name=" + encodeURIComponent(f.name), { method: "POST", body: f, headers: { "content-type": f.type || "application/octet-stream" } });
+      const j = await r.json();
+      if (r.ok) ok++; else bad.push(f.name + " (" + (j.error || r.status) + ")");
+    } catch (e) { bad.push(f.name + " (" + e.message + ")"); }
+  }
+  st.textContent = "Done: " + ok + " uploaded." + (bad.length ? " Not uploaded: " + bad.join("; ") : "");
+  if (ok) setTimeout(() => location.href = "/?msg=" + encodeURIComponent(ok + " episode files uploaded.") + "#series", 1500);
+};
+</script></section>
 
 <section id="community"><h2>Community board</h2>
 <p class="small">The scout reads ${(settings.sources || []).filter((s) => s.enabled).length} sources every 4 hours, keeps positive local stories and events, and the desk posts the best ones at ${esc(settings.community.times.join(" and "))}. The same list feeds the website's Community board.${scout ? ` Last scout: ${esc(fmtLocal(scout.at, tz))}.` : ""}</p>
