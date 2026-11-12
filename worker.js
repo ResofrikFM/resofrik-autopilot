@@ -1619,6 +1619,7 @@ async function handleStudio(request, env, url) {
       artistPromos: (settings.artists || []).filter((a) => a.name && a.audio && /^https?:\/\//.test(a.audio) && !promoted[slug(a.name)]).slice(0, 2),
       seenFeedEntries: await kvJson(env, "feeds:seen", []),
       stories: settings.studio.stories && settings.studio.stories.enabled === false ? null : await storyPlan(env, settings, now),
+      photos: (await listPhotos(env)).map(({ url, tag, about, credit }) => ({ url, tag, about, credit })),
     });
   }
   if (path === "upload" && request.method === "POST") {
@@ -1729,6 +1730,50 @@ async function listMusic(env, request) {
   } while (cursor);
   return out;
 }
+const PHOTO_TAGS = { station: "Station & studio", shows: "Shows & hosts", community: "Events & community", artists: "Artists", behind: "Behind the scenes" };
+async function listPhotos(env, prefix = "photos/") {
+  if (!env.MEDIA || typeof env.MEDIA.list !== "function") return [];
+  const out = [];
+  let cursor;
+  do {
+    const r = await env.MEDIA.list({ prefix, cursor, limit: 500, include: ["customMetadata"] });
+    for (const o of r.objects) {
+      const parts = o.key.split("/");
+      const meta = o.customMetadata || {};
+      out.push({ key: o.key, tag: prefix === "photos/" ? parts[1] || "station" : "artists", url: `${env.PUBLIC_URL || ""}/m/${o.key}`, about: meta.about || "", credit: meta.credit || "", email: meta.email || "", instagram: meta.instagram || "", size: o.size });
+    }
+    cursor = r.truncated ? r.cursor : null;
+  } while (cursor);
+  return out;
+}
+function cleanName(n, fallback) {
+  return String(n || fallback).replace(/[^a-zA-Z0-9._-]/g, "-").slice(-80);
+}
+function isImageFile(f) {
+  return f && typeof f !== "string" && f.size && (/^image\/(jpeg|png|webp)$/.test(f.type || "") || /\.(jpe?g|png|webp)$/i.test(f.name || ""));
+}
+function sendPhotosPage(settings, msg) {
+  const st = settings.station;
+  return page(
+    `Send your photos · ${st.name}`,
+    `<main class="links"><section class="hero">${st.logoUrl ? `<img src="${esc(st.logoUrl)}" alt="${esc(st.name)} logo" class="logo">` : ""}<h1>Send us your photos</h1><p class="tag">For artists we play on ${esc(st.name)}</p></section>
+${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
+<section><p class="small">Send up to 5 photos of yourself or your band (JPG or PNG, up to 15 MB each). We'll use them to feature you on our website and social media when your music is in rotation. Please only send photos you own or have the photographer's permission to share.</p>
+<form method="post" action="/send-photos" enctype="multipart/form-data">
+<input name="artist" placeholder="Artist or band name" required maxlength="80">
+<input name="credit" placeholder="Photo credit (photographer's name, optional)" maxlength="80">
+<input name="instagram" placeholder="Instagram handle (optional)" maxlength="60">
+<input type="email" name="email" placeholder="Your email" required maxlength="120">
+<input type="file" name="file" accept="image/jpeg,image/png,image/webp" multiple required>
+<input name="website" style="display:none" tabindex="-1" autocomplete="off" aria-hidden="true">
+<label class="small" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0"><input type="checkbox" name="consent" value="yes" required style="width:auto;margin-top:3px"> I own these photos or have the photographer's permission, and I allow ${esc(st.name)} to use them to promote my music on its website and social media.</label>
+<button>Send photos</button></form></section>
+<p class="small center"><a href="${esc(st.website)}">${esc(st.linkLabel)}</a></p></main>`,
+    st.brandColor,
+    LINKS_CSS
+  );
+}
+
 async function storyPlan(env, settings, now) {
   const cfg = settings.studio.stories || {};
   const tz = settings.station.timezone;
@@ -1952,6 +1997,7 @@ async function handleHttp(request, env, ctx) {
   const url = new URL(request.url);
   const p = url.pathname;
   if (p === "/health") return json({ ok: true, version: VERSION, lastTick: Number((await kvGet(env, "status:lastTick")) || 0) || null });
+  if (p.startsWith("/m/photos-pending/") && env.ADMIN_PASSWORD && getCookie(request, "rp") !== (await sessionToken(env))) return new Response("not found", { status: 404 });
   if (p.startsWith("/m/")) return serveMedia(request, env, decodeURIComponent(p.slice(3)));
   if (p.startsWith("/go/")) {
     const [, , postId, platform] = p.split("/");
@@ -1959,6 +2005,28 @@ async function handleHttp(request, env, ctx) {
   }
   if (p.startsWith("/api/studio/")) return handleStudio(request, env, url);
   if (p.startsWith("/api/public/")) return handlePublic(request, env, url);
+  if (p === "/send-photos") {
+    const settings = await loadSettings(env);
+    if (request.method !== "POST") return html(sendPhotosPage(settings, url.searchParams.get("msg")));
+    const form = await request.formData();
+    const artist = String(form.get("artist") || "").trim().slice(0, 80);
+    const email = String(form.get("email") || "").trim().slice(0, 120);
+    const files = form.getAll("file").filter(isImageFile).slice(0, 5);
+    if (String(form.get("website") || "")) return redirect("/send-photos?msg=" + encodeURIComponent("Thank you!"));
+    if (!artist || !email || form.get("consent") !== "yes" || !files.length) return redirect("/send-photos?msg=" + encodeURIComponent("Please fill in your name and email, tick the permission box, and choose at least one JPG or PNG photo."));
+    if (!env.MEDIA) return redirect("/send-photos?msg=" + encodeURIComponent("Uploads aren't open yet. Please email your photos to us instead."));
+    let n = 0;
+    for (const f of files) {
+      if (f.size > 15 * 1e6) continue;
+      await env.MEDIA.put(`photos-pending/${newId()}-${cleanName(f.name, "photo.jpg")}`, f, {
+        httpMetadata: { contentType: f.type || "image/jpeg" },
+        customMetadata: { about: artist, credit: String(form.get("credit") || "").trim().slice(0, 80), email, instagram: String(form.get("instagram") || "").trim().replace(/^@/, "").slice(0, 60), consent: new Date().toISOString() },
+      });
+      n++;
+    }
+    if (n) await notify(env, `📸 ${artist} sent ${n} photo${n === 1 ? "" : "s"}. Approve them in the control panel → Photo library.`);
+    return redirect("/send-photos?msg=" + encodeURIComponent(n ? `Thank you, ${artist}! We received ${n} photo${n === 1 ? "" : "s"} and will review them shortly.` : "Those files were too large (15 MB each at most)."));
+  }
   if (p === "/links") {
     const settings = await loadSettings(env);
     return html(linksPage(env, settings, await publicEvents(env, settings), await publicMedia(env, settings), url.searchParams.get("msg")));
@@ -2071,6 +2139,51 @@ async function handleAction(request, env) {
       await env.MEDIA.put(key, f, { httpMetadata: { contentType: f.type || "audio/mpeg" } });
     }
     return back(`Added ${files.length} track${files.length === 1 ? "" : "s"} to ${genre}.`);
+  }
+  if (act === "photo_upload") {
+    if (!env.MEDIA) return back("Media storage (R2) isn't connected yet.");
+    const tag = PHOTO_TAGS[String(form.get("tag"))] ? String(form.get("tag")) : "station";
+    const files = form.getAll("file").filter(isImageFile);
+    if (!files.length) return back("Choose one or more JPG, PNG or WebP photos first.");
+    const about = String(form.get("about") || "").trim().slice(0, 120), credit = String(form.get("credit") || "").trim().slice(0, 80);
+    let n = 0;
+    for (const f of files.slice(0, 30)) {
+      if (f.size > 25 * 1e6) continue;
+      await env.MEDIA.put(`photos/${tag}/${newId()}-${cleanName(f.name, "photo.jpg")}`, f, { httpMetadata: { contentType: f.type || "image/jpeg" }, customMetadata: { about, credit } });
+      n++;
+    }
+    return back(`Added ${n} photo${n === 1 ? "" : "s"} to ${PHOTO_TAGS[tag]}.${n < files.length ? " Some were skipped (over 25 MB, or more than 30 at once)." : ""}`);
+  }
+  if (act === "photo_delete" || act === "photo_reject") {
+    const key = String(form.get("key") || "");
+    if (!/^photos(-pending)?\//.test(key)) return back("Unknown photo.");
+    await env.MEDIA.delete(key);
+    const s = await loadSettings(env);
+    const owner = (s.artists || []).find((x) => x.image && x.image.endsWith("/m/" + key));
+    if (owner) {
+      owner.image = "";
+      await saveSettings(env, s);
+    }
+    return back(act === "photo_reject" ? "Photo declined and removed." : "Photo removed from the library.");
+  }
+  if (act === "photo_approve") {
+    const key = String(form.get("key") || "");
+    if (!key.startsWith("photos-pending/") || !env.MEDIA) return back("Unknown photo.");
+    const obj = await env.MEDIA.get(key);
+    if (!obj) return back("That photo is gone already.");
+    const meta = obj.customMetadata || {};
+    const newKey = "photos/artists/" + key.slice("photos-pending/".length);
+    await env.MEDIA.put(newKey, obj.body, { httpMetadata: obj.httpMetadata, customMetadata: meta });
+    await env.MEDIA.delete(key);
+    // first approved photo of an artist in rotation becomes their picture
+    const s = await loadSettings(env);
+    const a = (s.artists || []).find((x) => x.name && meta.about && x.name.toLowerCase() === meta.about.toLowerCase());
+    if (a && !a.image) {
+      a.image = `${origin(env, request)}/m/${newKey}`;
+      if (!a.instagram && meta.instagram) a.instagram = meta.instagram;
+      await saveSettings(env, s);
+    }
+    return back(`Approved. It's in the Photo library under Artists${a && a.image.endsWith(newKey) ? ` and is now ${a.name}'s picture` : ""}.`);
   }
   if (act === "clip_url" || act === "clip_upload") {
     let src = String(form.get("url") || "").trim();
@@ -2190,6 +2303,7 @@ textarea,input[type=text],input[type=date],input[type=time],input[type=url],inpu
 textarea{min-height:70px}textarea.code{font:13px/1.4 ui-monospace,Menlo,monospace;min-height:460px}
 details summary{cursor:pointer;color:var(--muted);font-size:13px;margin-top:6px}
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px solid var(--line);padding:6px 4px;text-align:left;vertical-align:top}
+.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin:10px 0}.photos figure{margin:0;display:grid;gap:6px;font-size:13px}.photos img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;display:block}.photos form{margin:0}.photos button{padding:5px 10px;font-size:13px}
 .small{font-size:13px;color:var(--muted)}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 @media(max-width:700px){.grid2,.grid3{grid-template-columns:1fr}.post{flex-direction:column}.thumb{width:100%;height:auto;aspect-ratio:4/5}}
 .preview{white-space:pre-wrap}.stat{border:1px solid var(--line);border-radius:9px;padding:10px}.stat b{font-size:22px;display:block}
@@ -2246,6 +2360,8 @@ async function dashboard(env, url, request) {
   const stats = await buildStats(env, 7);
   const report = await kvJson(env, "report:last", null);
   const music = await listMusic(env);
+  const photos = await listPhotos(env);
+  const pendingPhotos = await listPhotos(env, "photos-pending/");
   const storyBank = await kvJson(env, "stories:left", null);
   const storiesUp = await queryPosts(env, "WHERE kind = 'story' AND when_ms >= ? AND status IN ('scheduled','approved','needs_review','processing') ORDER BY when_ms LIMIT 6", now);
 
@@ -2257,6 +2373,8 @@ async function dashboard(env, url, request) {
   if (!env.STUDIO_TOKEN) alerts.push("The Studio isn't linked yet: add a STUDIO_TOKEN secret here and in GitHub (see setup guide).");
   if (!scout || now - scout.at > 12 * 3600000) alerts.push("The Studio's scout hasn't reported in the last 12 hours. Check GitHub → Actions.");
   if (!music.length) alerts.push("The Music library is empty, so Rare Breed Stories will be silent. Upload a few royalty-free tracks under Music library.");
+  if (!photos.length) alerts.push("The Photo library is empty, so cards use designed backgrounds only. Upload your station photos under Photo library.");
+  if (pendingPhotos.length) alerts.push(`${pendingPhotos.length} artist photo${pendingPhotos.length === 1 ? " is" : "s are"} waiting for your OK under Photo library.`);
   if (storyBank && storyBank.left < 6) alerts.push(`Only ${storyBank.left} Rare Breed Stories left in the bank. Ask Claude for the next batch.`);
   if (!activeShows(settings).length) alerts.push("No show times are switched on, so show reminders are off. Settings → schedule.");
   if (!(settings.artists || []).length) alerts.push("No artists listed yet. Add a few (with picture and song links) under Settings → artists so the Studio can make promo videos.");
@@ -2296,7 +2414,7 @@ ${p.status === "skipped" ? `<button class="ghost" name="do" value="restore">Put 
   const maxClicks = Math.max(1, ...stats.clicks.map((c) => c.n || 0));
   const body = `
 <header><b>${esc(settings.station.name)} Autopilot</b><span class="tag">${esc(settings.station.slogan)}</span><span class="pill ${settings.paused ? "bad" : "ok"}">${settings.paused ? "Paused" : "Running"}</span>
-<nav><a href="#queue">Queue</a><a href="#studio">Studio</a><a href="#community">Community</a><a href="#inbox">Inbox${inbox.length ? ` (${inbox.length})` : ""}</a><a href="#results">Results</a><a href="#conn">Connections</a><a href="#settings">Settings</a><a href="/links" target="_blank">Link page ↗</a><a href="/logout">Sign out</a></nav></header>
+<nav><a href="#queue">Queue</a><a href="#studio">Studio</a><a href="#photos">Photos</a><a href="#community">Community</a><a href="#inbox">Inbox${inbox.length ? ` (${inbox.length})` : ""}</a><a href="#results">Results</a><a href="#conn">Connections</a><a href="#settings">Settings</a><a href="/links" target="_blank">Link page ↗</a><a href="/logout">Sign out</a></nav></header>
 <main>${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
 <section><h2>At a glance</h2><div class="grid3">
 <div class="stat"><b>${upcoming.filter((p) => p.status !== "skipped").length}</b>posts queued</div><div class="stat"><b>${stats.published}</b>posted this week</div><div class="stat"><b>${stats.totalClicks}</b>link clicks this week</div>
@@ -2323,6 +2441,14 @@ ${alerts.map((a) => `<div class="alert">${a}</div>`).join("")}
 <p class="small">Only upload music you're allowed to use: royalty-free tracks (for example Pixabay Music or the YouTube Audio Library, “no attribution required”) or songs artists sent with permission. Pick the closest style so each story gets fitting music.</p>
 <table>${["reggae", "soul", "african", "afrobeats", "hiphop", "jazz"].map((g) => `<tr><td>${esc(g)}</td><td>${music.filter((m) => m.genre === g).map((m) => `<a href="${esc(m.url)}" target="_blank">${esc(m.name)}</a>`).join(", ") || `<span class="small">none yet</span>`}</td></tr>`).join("")}</table>
 <form method="post" action="/action" enctype="multipart/form-data"><input type="hidden" name="anchor" value="music"><div class="grid2"><input type="file" name="file" accept="audio/*" multiple required><select name="genre">${["reggae", "soul", "african", "afrobeats", "hiphop", "jazz"].map((g) => `<option>${g}</option>`).join("")}</select></div><p><button name="do" value="music_upload">Add to music library</button></p></form></section>
+
+<section id="photos"><h2>Photo library (${photos.length} photo${photos.length === 1 ? "" : "s"})</h2>
+<p class="small">Your own photos make the posts. The Studio puts them behind the cards for each kind of post (Artists for music posts, Shows &amp; hosts for show reminders, Station &amp; studio for everything else) and into the weekly carousels. Community news posts keep the designed background, so nobody's photo appears next to a story it isn't from. Only upload photos the station owns or has permission to use.</p>
+${pendingPhotos.length ? `<h3>Sent by artists, waiting for your OK (${pendingPhotos.length})</h3><div class="photos">${pendingPhotos.map((ph) => `<figure><a href="${esc(ph.url)}" target="_blank"><img src="${esc(ph.url)}" alt="" loading="lazy"></a><figcaption><b>${esc(ph.about)}</b>${ph.credit ? `<br>Photo: ${esc(ph.credit)}` : ""}<br><span class="small">${esc(ph.email)}${ph.instagram ? " · @" + esc(ph.instagram) : ""}</span></figcaption><form method="post" action="/action"><input type="hidden" name="anchor" value="photos"><input type="hidden" name="key" value="${esc(ph.key)}"><button name="do" value="photo_approve">Approve</button> <button class="ghost" name="do" value="photo_reject">Decline</button></form></figure>`).join("")}</div>` : ""}
+${Object.entries(PHOTO_TAGS).map(([t, label]) => { const list = photos.filter((ph) => ph.tag === t); return `<details${list.length && list.length <= 12 ? " open" : ""}><summary>${esc(label)} (${list.length})</summary>${list.length ? `<div class="photos">${list.map((ph) => `<figure><a href="${esc(ph.url)}" target="_blank"><img src="${esc(ph.url)}" alt="${esc(ph.about)}" loading="lazy"></a>${ph.about || ph.credit ? `<figcaption>${esc(ph.about)}${ph.credit ? ` <span class="small">· ${esc(ph.credit)}</span>` : ""}</figcaption>` : ""}<form method="post" action="/action"><input type="hidden" name="anchor" value="photos"><input type="hidden" name="key" value="${esc(ph.key)}"><button class="ghost" name="do" value="photo_delete" onclick="return confirm('Remove this photo from the library?')">Remove</button></form></figure>`).join("")}</div>` : `<p class="small">None yet.</p>`}</details>`; }).join("")}
+<h3>Add photos</h3>
+<form method="post" action="/action" enctype="multipart/form-data"><input type="hidden" name="anchor" value="photos"><input type="file" name="file" accept="image/jpeg,image/png,image/webp" multiple required><div class="grid3"><select name="tag">${Object.entries(PHOTO_TAGS).map(([t, label]) => `<option value="${t}">${esc(label)}</option>`).join("")}</select><input name="about" placeholder="Who or what is in them (e.g. a show or artist name)"><input name="credit" placeholder="Photo credit (optional)"></div><p class="small">Up to 30 photos at a time, 25 MB each. Tip: name the show or artist in “Who or what” so the Studio can match photos to the right show reminder or artist post.</p><p><button name="do" value="photo_upload">Add to photo library</button></p></form>
+<p class="small">Artists can send their own photos here: <a href="/send-photos" target="_blank">${esc(origin(env, request))}/send-photos</a> (share this link with them). You approve each one first.</p></section>
 
 <section id="community"><h2>Community board</h2>
 <p class="small">The scout reads ${(settings.sources || []).filter((s) => s.enabled).length} sources every 4 hours, keeps positive local stories and events, and the desk posts the best ones at ${esc(settings.community.times.join(" and "))}. The same list feeds the website's Community board.${scout ? ` Last scout: ${esc(fmtLocal(scout.at, tz))}.` : ""}</p>
