@@ -121,6 +121,7 @@ const DEFAULT_SETTINGS = {
       // { name: "Resofrik FM on YouTube", url: "https://www.youtube.com/feeds/videos.xml?channel_id=…", type: "youtube" }
     ],
     videoPlatforms: ["instagram", "facebook", "threads", "bluesky", "mastodon", "telegram"],
+    stories: { enabled: true, days: ["Tue", "Fri"], time: "19:30" },
   },
   engage: { enabled: true, autoReply: "simple", maxAutoPerHour: 10 },
   report: { enabled: true, day: "Mon", time: "09:00" },
@@ -1178,7 +1179,8 @@ async function publishPost(env, settings, post) {
       break;
     }
     try {
-      const out = r && r.pending ? await def.resume(env, settings, post, p, r.state) : await def.publish(env, settings, post, p);
+      const view = post.variants && post.variants[p] ? { ...post, short: post.variants[p], long: post.variants[p] } : post;
+      const out = r && r.pending ? await def.resume(env, settings, view, p, r.state) : await def.publish(env, settings, view, p);
       if (out && out.pending) {
         const since = (r && r.since) || Date.now();
         if (Date.now() - since > 2 * 3600 * 1000) throw new Error("the platform took too long to process the media");
@@ -1616,6 +1618,7 @@ async function handleStudio(request, env, url) {
       showCardsNeeded: activeShows(settings).filter((s) => !showcards[slug(s.show)]).map((s) => ({ show: s.show, slug: slug(s.show), day: s.day, start: s.start, description: s.description })),
       artistPromos: (settings.artists || []).filter((a) => a.name && a.audio && /^https?:\/\//.test(a.audio) && !promoted[slug(a.name)]).slice(0, 2),
       seenFeedEntries: await kvJson(env, "feeds:seen", []),
+      stories: settings.studio.stories && settings.studio.stories.enabled === false ? null : await storyPlan(env, settings, now),
     });
   }
   if (path === "upload" && request.method === "POST") {
@@ -1660,6 +1663,16 @@ async function handleStudio(request, env, url) {
     await kvPut(env, "showcards", JSON.stringify(cards));
     return json({ ok: true });
   }
+  if (path === "story-used") {
+    const used = await kvJson(env, "stories:used", []);
+    if (body.id && !used.includes(body.id)) used.push(body.id);
+    await kvPut(env, "stories:used", JSON.stringify(used));
+    return json({ ok: true });
+  }
+  if (path === "stories-left") {
+    await kvPut(env, "stories:left", JSON.stringify({ left: Number(body.left) || 0, total: Number(body.total) || 0, at: now }));
+    return json({ ok: true });
+  }
   if (path === "promoted") {
     const pr = await kvJson(env, "promoted", {});
     pr[body.slug] = now;
@@ -1692,12 +1705,42 @@ async function handleStudio(request, env, url) {
       results: {},
       createdAt: now,
       jobId: body.jobId || "",
+      variants: body.variants && typeof body.variants === "object" ? body.variants : undefined,
       download: isVideo ? body.media.urls[0] : "",
     });
     await savePost(env, post);
     return json({ id: post.id, when, whenLocal: fmtLocal(when, tz) });
   }
   return json({ error: "unknown" }, 404);
+}
+
+async function listMusic(env, request) {
+  if (!env.MEDIA || typeof env.MEDIA.list !== "function") return [];
+  const out = [];
+  let cursor;
+  do {
+    const r = await env.MEDIA.list({ prefix: "music/", cursor, limit: 500 });
+    for (const o of r.objects) {
+      const parts = o.key.split("/");
+      out.push({ key: o.key, genre: parts[1] || "other", name: parts.slice(2).join("/").replace(/^[a-z0-9]{8,12}-/, ""), url: `${env.PUBLIC_URL || ""}/m/${o.key}`, size: o.size });
+    }
+    cursor = r.truncated ? r.cursor : null;
+  } while (cursor);
+  return out;
+}
+async function storyPlan(env, settings, now) {
+  const cfg = settings.studio.stories || {};
+  const tz = settings.station.timezone;
+  const ups = await queryPosts(env, "WHERE kind = 'story' AND when_ms >= ? AND status IN ('scheduled','approved','needs_review','processing','publishing')", now - 86400000);
+  return {
+    days: cfg.days || ["Tue", "Fri"],
+    time: cfg.time || "19:30",
+    today: zoneParts(now, tz).date,
+    takenDates: ups.map((p) => zoneParts(p.when, tz).date),
+    used: await kvJson(env, "stories:used", []),
+    music: (await listMusic(env)).map((m) => ({ genre: m.genre, url: m.url })),
+    platforms: settings.studio.videoPlatforms,
+  };
 }
 
 async function nextFreeSlot(env, settings, times, now, kind) {
@@ -1709,7 +1752,7 @@ async function nextFreeSlot(env, settings, times, now, kind) {
     for (const t of valid) {
       const when = zonedToUtc(date, t, tz);
       if (when < now + 30 * 60000) continue;
-      if (await env.DB.prepare("SELECT id FROM posts WHERE kind IN ('clip','promo','slideshow','carousel') AND when_ms = ?").bind(when).first()) continue;
+      if (await env.DB.prepare("SELECT id FROM posts WHERE kind IN ('clip','promo','slideshow','carousel','story') AND when_ms = ?").bind(when).first()) continue;
       return when;
     }
   }
@@ -1985,6 +2028,18 @@ async function handleAction(request, env) {
       return back(`❌ ${p.label}: ${e.message}`);
     }
   }
+  if (act === "music_upload") {
+    if (!env.MEDIA) return back("Media storage (R2) isn't connected yet.");
+    const genre = ["reggae", "soul", "african", "afrobeats", "hiphop", "jazz"].includes(String(form.get("genre"))) ? String(form.get("genre")) : "other";
+    const files = form.getAll("file").filter((f) => f && typeof f !== "string" && f.size);
+    if (!files.length) return back("Choose one or more audio files first.");
+    for (const f of files.slice(0, 20)) {
+      if (f.size > 40 * 1e6) continue;
+      const key = `music/${genre}/${newId()}-${String(f.name || "track.mp3").replace(/[^a-zA-Z0-9._-]/g, "-")}`;
+      await env.MEDIA.put(key, f, { httpMetadata: { contentType: f.type || "audio/mpeg" } });
+    }
+    return back(`Added ${files.length} track${files.length === 1 ? "" : "s"} to ${genre}.`);
+  }
   if (act === "clip_url" || act === "clip_upload") {
     let src = String(form.get("url") || "").trim();
     if (act === "clip_upload") {
@@ -2158,6 +2213,9 @@ async function dashboard(env, url, request) {
   const scout = await kvJson(env, "scout:report", null);
   const stats = await buildStats(env, 7);
   const report = await kvJson(env, "report:last", null);
+  const music = await listMusic(env);
+  const storyBank = await kvJson(env, "stories:left", null);
+  const storiesUp = await queryPosts(env, "WHERE kind = 'story' AND when_ms >= ? AND status IN ('scheduled','approved','needs_review','processing') ORDER BY when_ms LIMIT 6", now);
 
   const alerts = [];
   if (settings.paused) alerts.push("Autopilot is <b>paused</b>. Nothing will post until you press Resume.");
@@ -2166,7 +2224,8 @@ async function dashboard(env, url, request) {
   if (!env.MEDIA) alerts.push("Media storage isn't connected: bind an R2 bucket as MEDIA so the Studio can store pictures and videos.");
   if (!env.STUDIO_TOKEN) alerts.push("The Studio isn't linked yet: add a STUDIO_TOKEN secret here and in GitHub (see setup guide).");
   if (!scout || now - scout.at > 12 * 3600000) alerts.push("The Studio's scout hasn't reported in the last 12 hours. Check GitHub → Actions.");
-  if (!env.ANTHROPIC_API_KEY) alerts.push("No AI key: posts use built-in templates and comments only get simple thank-yous. Add ANTHROPIC_API_KEY for full writing and replies.");
+  if (!music.length) alerts.push("The Music library is empty, so Rare Breed Stories will be silent. Upload a few royalty-free tracks under Music library.");
+  if (storyBank && storyBank.left < 6) alerts.push(`Only ${storyBank.left} Rare Breed Stories left in the bank. Ask Claude for the next batch.`);
   if (!activeShows(settings).length) alerts.push("No show times are switched on, so show reminders are off. Settings → schedule.");
   if (!(settings.artists || []).length) alerts.push("No artists listed yet. Add a few (with picture and song links) under Settings → artists so the Studio can make promo videos.");
   if (!env.PUBLIC_URL) alerts.push("Set PUBLIC_URL (this Worker's address) so links are tracked and media links are permanent.");
@@ -2225,6 +2284,13 @@ ${alerts.map((a) => `<div class="alert">${a}</div>`).join("")}
 <h3>Studio jobs</h3><table>${jobs.map((j) => { const d = JSON.parse(j.data); return `<tr><td class="small">${esc(fmtLocal(j.created, tz))}</td><td>${esc(d.title || d.url)}</td><td><span class="pill ${j.status === "done" ? "ok" : j.status === "failed" ? "bad" : "warn"}">${esc(j.status)}</span></td></tr>`; }).join("") || `<tr><td class="small">No jobs yet.</td></tr>`}</table>
 <h3>Videos ready for TikTok and YouTube</h3><p class="small">TikTok and YouTube keep automated uploads private until an app passes their review, so download these and post them by hand (or through Content360).</p>
 <table>${readyVideos.filter((p) => p.media.type === "video").map((p) => `<tr><td>${esc(p.headline || shortText(p).slice(0, 70))}</td><td><a href="${esc(p.media.urls[0])}" download>Download</a></td></tr>`).join("") || `<tr><td class="small">None yet.</td></tr>`}</table></section>
+<section id="music"><h2>Rare Breed Stories &amp; Music library</h2>
+<p class="small">Twice a week (${esc(((settings.studio.stories || {}).days || ["Tue", "Fri"]).join(" and "))} at ${esc((settings.studio.stories || {}).time || "19:30")}) the Studio turns a fact-checked artist story into a vertical video with music, writes a different caption for each platform, and ends with a question to get people talking. ${storyBank ? `<b>${storyBank.left}</b> of ${storyBank.total} stories left in the bank.` : ""}</p>
+<h3>Coming up</h3><table>${storiesUp.map((p) => `<tr><td class="small" style="white-space:nowrap">${esc(fmtLocal(p.when, tz))}</td><td>${esc(p.headline || "")}</td><td>${p.media.urls[0] ? `<a href="${esc(p.media.urls[0])}" target="_blank">Watch</a>` : ""}</td></tr>`).join("") || `<tr><td class="small">The Studio makes the next ones on its evening run.</td></tr>`}</table>
+<h3>Music library (${music.length} track${music.length === 1 ? "" : "s"})</h3>
+<p class="small">Only upload music you're allowed to use: royalty-free tracks (for example Pixabay Music or the YouTube Audio Library, “no attribution required”) or songs artists sent with permission. Pick the closest style so each story gets fitting music.</p>
+<table>${["reggae", "soul", "african", "afrobeats", "hiphop", "jazz"].map((g) => `<tr><td>${esc(g)}</td><td>${music.filter((m) => m.genre === g).map((m) => `<a href="${esc(m.url)}" target="_blank">${esc(m.name)}</a>`).join(", ") || `<span class="small">none yet</span>`}</td></tr>`).join("")}</table>
+<form method="post" action="/action" enctype="multipart/form-data"><input type="hidden" name="anchor" value="music"><div class="grid2"><input type="file" name="file" accept="audio/*" multiple required><select name="genre">${["reggae", "soul", "african", "afrobeats", "hiphop", "jazz"].map((g) => `<option>${g}</option>`).join("")}</select></div><p><button name="do" value="music_upload">Add to music library</button></p></form></section>
 
 <section id="community"><h2>Community board</h2>
 <p class="small">The scout reads ${(settings.sources || []).filter((s) => s.enabled).length} sources every 4 hours, keeps positive local stories and events, and the desk posts the best ones at ${esc(settings.community.times.join(" and "))}. The same list feeds the website's Community board.${scout ? ` Last scout: ${esc(fmtLocal(scout.at, tz))}.` : ""}</p>
