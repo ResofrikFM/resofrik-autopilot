@@ -586,6 +586,28 @@ def show_card_html(show):
     return page(body, pillar='reminder', photo=photo)
 
 
+NP_CSS = """
+.npbg{position:absolute;inset:-60px;background-size:cover;background-position:center;filter:blur(48px) saturate(1.25) brightness(.55)}
+.npshade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(7,7,7,.35),rgba(7,7,7,.15) 40%,rgba(7,7,7,.85) 70%,#070707)}
+.art{position:absolute;left:50%;top:210px;width:600px;height:600px;margin-left:-300px;border-radius:36px;object-fit:cover;box-shadow:0 40px 90px rgba(0,0,0,.6),0 0 0 6px rgba(255,255,255,.06)}
+.np .main{top:850px;bottom:185px;justify-content:flex-start;gap:18px;align-items:center;text-align:center}
+.np .head{font-size:74px}
+.np .meta{font-size:40px}
+.live i{animation:none;background:#da1a1a;opacity:1}
+"""
+
+
+def np_card_html(song):
+    """'Now playing' picture card: the song's own artwork, or a photo of the artist or the studio."""
+    b = brand()
+    art = song.get("art", "")
+    photo = art or pick_photo(["artists", "station"], song["track"], song.get("artist", ""))
+    bg = f"<div class='npbg' style=\"background-image:url('{esc(photo)}')\"></div><div class='npshade'></div><img class='art' src='{esc(photo)}' alt=''>" if photo else ""
+    body = f"""{bg}{top_html()}<div class='main'><div><span class='chip live'><i></i>Now playing</span></div><div class='head'>{esc(song['title'])}</div><div class='meta'>{esc(song.get('artist', ''))}</div>{stripe_html(b)}</div>{foot_html('Listen live')}"""
+    html_doc = page(body, pillar="music", extra_css=NP_CSS, motif=not photo)
+    return html_doc.replace("<body class=''>", "<body class='np'>", 1)
+
+
 DAY_PLURAL = {"Sun": "Sundays", "Mon": "Mondays", "Tue": "Tuesdays", "Wed": "Wednesdays", "Thu": "Thursdays", "Fri": "Fridays", "Sat": "Saturdays"}
 
 
@@ -984,6 +1006,14 @@ def make():
             done["cards"] += 1
         except Exception as e:
             say("card failed:", c.get("id"), e)
+    for song in tasks.get("nowPlayingCards", [])[:12]:
+        try:
+            png = out_dir / f"np-{hashlib.sha1(song['track'].encode()).hexdigest()[:10]}.png"
+            chrome_shot(np_card_html(song), CW, CH, str(png))
+            api("npcard", {"track": song["track"], "url": upload(to_jpg(png, png.with_suffix(".jpg")))})
+            done["npcards"] = done.get("npcards", 0) + 1
+        except Exception as e:
+            say("now playing card failed:", song.get("track"), e)
     for s in tasks.get("showCardsNeeded", []):
         try:
             png = out_dir / f"show-{s['slug']}.png"
