@@ -1,0 +1,290 @@
+[
+  {
+    "id": "marley-night-shift",
+    "artist": "Bob Marley",
+    "genre": "Reggae",
+    "music": "reggae",
+    "hook": "Before the world knew Bob Marley, he worked the night shift in Delaware.",
+    "beats": [
+      "In 1966 he moved in with his mother in Wilmington, Delaware.",
+      "Under the name “Donald Marley,” he worked at a DuPont lab and a Chrysler plant.",
+      "He was saving money to start his own record label back in Jamaica.",
+      "Years later, that time is often linked to his 1976 song “Night Shift.”"
+    ],
+    "payoff": "Wilmington now has a One Love Park across from the house where he lived.",
+    "question": "What job were you doing while chasing your dream?",
+    "source": {
+      "name": "Delaware Public Archives",
+      "url": "https://archives.delaware.gov/?p=21938"
+    },
+    "tags": [
+      "#BobMarley",
+      "#Reggae",
+      "#ReggaeHistory"
+    ]
+  },
+  {
+    "id": "fela-medicine",
+    "artist": "Fela Kuti",
+    "genre": "Afrobeat",
+    "music": "afrobeats",
+    "hook": "Fela Kuti's parents sent him to London to become a doctor.",
+    "beats": [
+      "It was 1958. He was 19, and the plan was medical school.",
+      "Instead, he enrolled at Trinity College of Music.",
+      "In London he formed Koola Lobitos, mixing jazz with highlife.",
+      "Back in Africa, that mix grew into a sound he named Afrobeat."
+    ],
+    "payoff": "London later put a blue plaque on the house where he lived as a student.",
+    "question": "Did you ever take a path your family didn't plan for you?",
+    "source": {
+      "name": "Trinity Laban Conservatoire",
+      "url": "https://www.trinitylaban.ac.uk/?p=6829"
+    },
+    "tags": [
+      "#FelaKuti",
+      "#Afrobeat",
+      "#AfricanMusic"
+    ]
+  },
+  {
+    "id": "withers-i-know",
+    "artist": "Bill Withers",
+    "genre": "Soul",
+    "music": "soul",
+    "hook": "The most famous part of “Ain't No Sunshine” was never supposed to be there.",
+    "beats": [
+      "Bill Withers wrote it while making toilets for Boeing 747s.",
+      "He was 31, still working in the factory.",
+      "In the middle he sang “I know” 26 times as a placeholder for lyrics he hadn't written.",
+      "The other musicians told him to leave it. So he did."
+    ],
+    "payoff": "The placeholder became the moment everybody waits for.",
+    "question": "What's your favorite Bill Withers song?",
+    "source": {
+      "name": "Wikipedia: Ain't No Sunshine",
+      "url": "https://en.wikipedia.org/wiki/Ain%27t_No_Sunshine"
+    },
+    "tags": [
+      "#BillWithers",
+      "#Soul",
+      "#SoulMusic"
+    ]
+  },
+  {
+    "id": "makeba-nine-passports",
+    "artist": "Miriam Makeba",
+    "genre": "African",
+    "music": "african",
+    "hook": "Her own country took away her citizenship. The world gave her nine passports.",
+    "beats": [
+      "In 1960, South Africa revoked Miriam Makeba's passport. She couldn't go home for her mother's funeral.",
+      "In 1963 she spoke against apartheid at the United Nations.",
+      "South Africa responded by stripping her citizenship.",
+      "Countries including Guinea and Ghana issued her passports."
+    ],
+    "payoff": "She held nine passports and honorary citizenship in ten countries.",
+    "question": "Which Makeba song should every young person hear?",
+    "source": {
+      "name": "South African History Online",
+      "url": "https://sahistory.org.za/people/miriam-makeba"
+    },
+    "tags": [
+      "#MiriamMakeba",
+      "#MamaAfrica",
+      "#AfricanMusic"
+    ]
+  },
+  {
+    "id": "toots-named-reggae",
+    "artist": "Toots and the Maytals",
+    "genre": "Reggae",
+    "music": "reggae",
+    "hook": "Reggae got its name from one song.",
+    "beats": [
+      "In 1968, the Maytals released “Do the Reggay.”",
+      "It was the first popular song to use the word.",
+      "Toots said it came from street slang for a scruffy look.",
+      "The name stuck to the new sound coming out of Jamaica."
+    ],
+    "payoff": "The Oxford English Dictionary credits Toots and the Maytals in the word's history.",
+    "question": "Name a reggae song that never gets old.",
+    "source": {
+      "name": "Wikipedia: Do the Reggay",
+      "url": "https://en.wikipedia.org/wiki/Do_the_Reggay"
+    },
+    "tags": [
+      "#TootsAndTheMaytals",
+      "#Reggae",
+      "#JamaicanMusic"
+    ]
+  },
+  {
+    "id": "tharpe-stadium-wedding",
+    "artist": "Sister Rosetta Tharpe",
+    "genre": "Gospel / Soul roots",
+    "music": "soul",
+    "hook": "In 1951, about 25,000 people paid to watch a gospel star get married.",
+    "beats": [
+      "Sister Rosetta Tharpe married her manager at Griffith Stadium in Washington, D.C.",
+      "Her backup singers were the bridesmaids.",
+      "After the vows, she played a concert in her wedding dress.",
+      "Decca even released a record of the ceremony."
+    ],
+    "payoff": "Many call her the godmother of rock and roll.",
+    "question": "Who's the most underrated pioneer in music history?",
+    "source": {
+      "name": "BlackPast",
+      "url": "https://blackpast.org/aah/tharpe-sister-rosetta-1915-1973"
+    },
+    "tags": [
+      "#SisterRosettaTharpe",
+      "#Gospel",
+      "#MusicHistory"
+    ]
+  },
+  {
+    "id": "toure-mayor",
+    "artist": "Ali Farka Touré",
+    "genre": "African / Desert blues",
+    "music": "african",
+    "hook": "A Grammy-winning guitarist went home and became mayor.",
+    "beats": [
+      "Ali Farka Touré of Mali was called the father of African desert blues.",
+      "He always returned to his hometown, Niafunké, and to farming.",
+      "In 2004 he became the town's mayor.",
+      "He used his own money to grade roads and power a generator for electricity."
+    ],
+    "payoff": "Music took him around the world. He brought it back home.",
+    "question": "What would you build in your hometown if you could?",
+    "source": {
+      "name": "Wikipedia: Ali Farka Touré",
+      "url": "https://en.wikipedia.org/wiki/Ali_Farka_Tour%C3%A9"
+    },
+    "tags": [
+      "#AliFarkaToure",
+      "#DesertBlues",
+      "#Mali"
+    ]
+  },
+  {
+    "id": "simone-curtis",
+    "artist": "Nina Simone",
+    "genre": "Soul / Jazz",
+    "music": "soul",
+    "hook": "Nina Simone dreamed of being a classical pianist. One school said no.",
+    "beats": [
+      "In 1951 she auditioned for the Curtis Institute of Music in Philadelphia.",
+      "She was rejected. She always believed it was because she was Black.",
+      "She started singing in an Atlantic City bar to make a living.",
+      "That's where Eunice Waymon became Nina Simone."
+    ],
+    "payoff": "In 2003, Curtis gave her an honorary degree. She died two days later.",
+    "question": "Which Nina Simone song stops you in your tracks?",
+    "source": {
+      "name": "The Nina Simone Estate",
+      "url": "https://www.ninasimone.com/press/"
+    },
+    "tags": [
+      "#NinaSimone",
+      "#Soul",
+      "#Jazz"
+    ]
+  },
+  {
+    "id": "masekela-armstrong-trumpet",
+    "artist": "Hugh Masekela",
+    "genre": "African jazz",
+    "music": "african",
+    "hook": "Louis Armstrong once mailed a trumpet to a youth band in South Africa.",
+    "beats": [
+      "Teenage Hugh Masekela asked a priest, Trevor Huddleston, for a trumpet.",
+      "Huddleston got him one, and other kids asked for instruments too.",
+      "They became the Huddleston Jazz Band.",
+      "When Huddleston met Armstrong, he told him about the band. Armstrong sent a trumpet."
+    ],
+    "payoff": "Masekela grew into one of South Africa's greatest musicians.",
+    "question": "Who gave you your first push in music?",
+    "source": {
+      "name": "NPR / WWNO",
+      "url": "https://www.wwno.org/2018-01-23/hugh-masekela-father-of-south-african-jazz-dies-at-78"
+    },
+    "tags": [
+      "#HughMasekela",
+      "#AfricanJazz",
+      "#SouthAfrica"
+    ]
+  },
+  {
+    "id": "herc-back-to-school",
+    "artist": "DJ Kool Herc",
+    "genre": "Hip hop (Jamaican roots)",
+    "music": "hiphop",
+    "hook": "Hip hop started at a party to buy back-to-school clothes.",
+    "beats": [
+      "August 11, 1973: Cindy Campbell rented the rec room at 1520 Sedgwick Avenue in the Bronx.",
+      "Her brother Clive, born in Jamaica, played the music.",
+      "He brought Jamaica's sound system culture with him.",
+      "As DJ Kool Herc, he stretched the drum breaks so people could dance longer."
+    ],
+    "payoff": "That night is widely seen as the birth of hip hop.",
+    "question": "Reggae and hip hop: what's the best song that connects them?",
+    "source": {
+      "name": "The Henry Ford",
+      "url": "https://www.thehenryford.org/collections/explore/articles/from-a-djs-closet"
+    },
+    "tags": [
+      "#HipHopHistory",
+      "#KoolHerc",
+      "#Reggae"
+    ]
+  },
+  {
+    "id": "mulatu-berklee",
+    "artist": "Mulatu Astatke",
+    "genre": "Ethio-jazz",
+    "music": "jazz",
+    "hook": "The father of Ethio-jazz was supposed to study aeronautical engineering.",
+    "beats": [
+      "Mulatu Astatke left Ethiopia to study, but music pulled him in.",
+      "He trained in London, then became Berklee College of Music's first African student.",
+      "He blended Ethiopian scales with jazz and Latin rhythms.",
+      "He called the sound Ethio-jazz."
+    ],
+    "payoff": "In 2012, Berklee gave him an honorary doctorate.",
+    "question": "Have you heard Ethio-jazz? Drop a favorite below.",
+    "source": {
+      "name": "Wikipedia: Mulatu Astatke",
+      "url": "https://en.wikipedia.org/wiki/Mulatu_Astatke"
+    },
+    "tags": [
+      "#MulatuAstatke",
+      "#EthioJazz",
+      "#Ethiopia"
+    ]
+  },
+  {
+    "id": "evora-barefoot-47",
+    "artist": "Cesária Évora",
+    "genre": "Morna (Cape Verde)",
+    "music": "african",
+    "hook": "She became a world star at 47, singing barefoot.",
+    "beats": [
+      "Cesária Évora sang in the bars of Mindelo, Cape Verde, from age 16.",
+      "For decades, almost no one outside the islands knew her.",
+      "In 1988, a producer brought her to Paris to record.",
+      "The album was called “La Diva aux pieds nus”: the barefoot diva."
+    ],
+    "payoff": "She went on to win a Grammy and take morna to the world.",
+    "question": "Is it ever too late to be discovered? Tell us a story.",
+    "source": {
+      "name": "Britannica",
+      "url": "https://www.britannica.com/print/article/197511"
+    },
+    "tags": [
+      "#CesariaEvora",
+      "#Morna",
+      "#CapeVerde"
+    ]
+  }
+]
