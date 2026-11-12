@@ -2169,6 +2169,24 @@ async function handleAction(request, env) {
     }
     return back(act === "photo_reject" ? "Photo declined and removed." : "Photo removed from the library.");
   }
+  if (act === "photo_move") {
+    // re-file a library photo under another section and/or description
+    const key = String(form.get("key") || "");
+    const tag = String(form.get("tag") || "");
+    if (!/^photos\/[a-z]+\//.test(key) || !PHOTO_TAGS[tag] || !env.MEDIA) return back("Unknown photo.");
+    const obj = await env.MEDIA.get(key);
+    if (!obj) return back("That photo is gone already.");
+    const meta = { ...(obj.customMetadata || {}) };
+    if (form.get("about") != null) meta.about = String(form.get("about")).trim().slice(0, 120);
+    const newKey = `photos/${tag}/${key.split("/").slice(2).join("/")}`;
+    if (newKey !== key) {
+      await env.MEDIA.put(newKey, obj.body, { httpMetadata: obj.httpMetadata, customMetadata: meta });
+      await env.MEDIA.delete(key);
+    } else {
+      await env.MEDIA.put(key, obj.body, { httpMetadata: obj.httpMetadata, customMetadata: meta });
+    }
+    return back(`Photo moved to ${PHOTO_TAGS[tag]}.`);
+  }
   if (act === "photo_approve") {
     const key = String(form.get("key") || "");
     if (!key.startsWith("photos-pending/") || !env.MEDIA) return back("Unknown photo.");
