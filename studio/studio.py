@@ -879,7 +879,9 @@ def transcribe(path):
     from faster_whisper import WhisperModel  # installed on the runner
 
     model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
-    segs, _ = model.transcribe(str(path), word_timestamps=True, vad_filter=True, beam_size=1)
+    import numpy as np  # decode with ffmpeg ourselves: newer PyAV versions break faster-whisper's own decoder
+    pcm = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", "16000", "-"], check=True, capture_output=True).stdout
+    segs, _ = model.transcribe(np.frombuffer(pcm, np.float32), word_timestamps=True, vad_filter=True, beam_size=1)
     segments, words = [], []
     for s in segs:
         segments.append({"start": s.start, "end": s.end, "text": s.text.strip()})
