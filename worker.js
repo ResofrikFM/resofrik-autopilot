@@ -1706,6 +1706,7 @@ async function handleStudio(request, env, url) {
       createdAt: now,
       jobId: body.jobId || "",
       variants: body.variants && typeof body.variants === "object" ? body.variants : undefined,
+      story: body.story && typeof body.story === "object" ? body.story : undefined,
       download: isVideo ? body.media.urls[0] : "",
     });
     await savePost(env, post);
@@ -1826,6 +1827,35 @@ async function publicMedia(env, settings) {
   return posts.map((p) => ({ title: p.headline || shortText(p).slice(0, 80), type: p.media.type, urls: p.media.urls, when: p.when, text: shortText(p) }));
 }
 
+async function publicStories(env, settings) {
+  // Rare Breed Stories that have already gone out on social media, newest first
+  const posts = await queryPosts(env, "WHERE status IN ('published','partial') AND kind = 'story' ORDER BY when_ms DESC LIMIT 24");
+  return posts.map((p) => {
+    const s = p.story || {};
+    return {
+      id: s.id || p.id,
+      artist: s.artist || p.headline || "",
+      genre: s.genre || "",
+      hook: s.hook || "",
+      beats: Array.isArray(s.beats) ? s.beats : [],
+      payoff: s.payoff || "",
+      question: s.question || "",
+      source: s.source || null,
+      video: p.media && p.media.type === "video" ? p.media.urls[0] : "",
+      text: s.hook ? "" : String(p.long || p.short || ""),
+      when: p.when,
+      date: prettyDate(zoneParts(p.when, settings.station.timezone).date),
+    };
+  });
+}
+
+function publicArtists(settings) {
+  // artists in rotation (sent with permission); one is featured each week
+  const list = (settings.artists || []).filter((a) => a && a.name).map((a) => ({ name: a.name, from: a.from || a.country || a.city || "", genre: a.genre || a.sound || "", song: a.song || "", bio: a.bio || a.blurb || "", image: a.image || "", link: a.link || a.url || (a.instagram ? "https://www.instagram.com/" + String(a.instagram).replace(/^@/, "") + "/" : "") }));
+  const week = Math.floor(Date.now() / (7 * 86400000));
+  return { featured: list.length ? list[week % list.length] : null, artists: list };
+}
+
 function linksPage(env, settings, board, media, msg) {
   const st = settings.station;
   const go = (id) => `/go/links/${id}`;
@@ -1853,6 +1883,8 @@ async function handlePublic(request, env, url) {
   const p = url.pathname;
   if (p === "/api/public/events") return json(await publicEvents(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p === "/api/public/media") return json(await publicMedia(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
+  if (p === "/api/public/stories") return json(await publicStories(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
+  if (p === "/api/public/artists") return json(publicArtists(settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p.startsWith("/api/public/click/")) {
     const [, , , , postId, platform] = p.split("/");
     await countClick(env, postId || "links", platform || "web");
