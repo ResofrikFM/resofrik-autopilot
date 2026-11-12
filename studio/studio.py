@@ -1121,6 +1121,7 @@ def make_stories(tasks, out_dir):
             mp4, secs = story_video(story, pick_track(plan.get("music") or [], story.get("music", "")), out_dir)
             caps = story_captions(story)
             api("post", {"kind": "story", "pillar": "music", "headline": story["artist"], "short": caps["bluesky"], "long": caps["facebook"], "variants": caps,
+                         "story": {k: story.get(k) for k in ("id", "artist", "genre", "hook", "beats", "payoff", "question", "source")},
                          "media": {"type": "video", "urls": [upload(mp4)]}, "whenLocal": {"date": date, "time": plan.get("time", "19:30")}, "platforms": plan.get("platforms")})
             api("story-used", {"id": story["id"]})
             last_music = story.get("music")
