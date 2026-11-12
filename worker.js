@@ -2002,6 +2002,7 @@ async function handlePublic(request, env, url) {
   if (p === "/api/public/events") return json(await publicEvents(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p === "/api/public/media") return json(await publicMedia(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p === "/api/public/stories") return json(await publicStories(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
+  if (p === "/api/public/photos") return json((await listPhotos(env)).filter((x) => x.tag === "station" || x.tag === "shows").map(({ url, tag, about }) => ({ url, tag, about })), 200, { ...CORS, "cache-control": "public, max-age=900" });
   if (p === "/api/public/originals") return json((await loadEpisodes(env)).filter((e) => e.video && !e.hidden).map(({ transcript, hidden, ...e }) => e), 200, { ...CORS, "cache-control": "public, max-age=300" });
   if (p === "/api/public/artists") return json(publicArtists(settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p.startsWith("/api/public/click/")) {
