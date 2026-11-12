@@ -110,6 +110,28 @@ def extract_json(text, opener="["):
 
 
 SETTINGS = {}
+PHOTOS = []  # the station's own photo library: [{url, tag, about, credit}]
+
+# which library photos may go behind each kind of post (in order of preference)
+PILLAR_PHOTO_TAGS = {"music": ["artists", "station"], "program": ["shows", "station"], "behind": ["behind", "shows", "station"],
+                     "cta": ["station", "shows", "community"], "reminder": ["shows", "station"], "manual": ["station", "shows"], "community": ["community", "station"]}
+
+
+def pick_photo(tags, seed, about=""):
+    """A photo from the library: one about this show/artist if there is one, otherwise by tag. Same seed -> same photo."""
+    if not PHOTOS:
+        return ""
+    n = int(hashlib.sha1(str(seed).encode()).hexdigest()[:8], 16)
+    if about:
+        a = about.lower()
+        named = [p for p in PHOTOS if p.get("about") and (p["about"].lower() in a or a in p["about"].lower())]
+        if named:
+            return named[n % len(named)]["url"]
+    for t in tags or []:
+        pool = [p for p in PHOTOS if p.get("tag") == t]
+        if pool:
+            return pool[n % len(pool)]["url"]
+    return ""
 
 # ---------------------------------------------------------------------------
 # Text helpers
@@ -457,6 +479,11 @@ body{font-family:%(body)s;color:%(text)s;background:%(dark)s;position:relative;-
 .num{font-family:%(display)s;font-weight:800;font-size:200px;line-height:.8;color:transparent;-webkit-text-stroke:3px var(--tone)}
 .photo{width:100%%;height:420px;object-fit:cover;border-radius:32px;display:block}
 .bar{position:absolute;left:0;right:0;bottom:0;height:16px;display:flex}.bar span{flex:1}
+.ph{position:absolute;left:0;top:0;width:100%%;height:860px;object-fit:cover;object-position:center 35%%}
+.phshade{position:absolute;left:0;right:0;top:0;height:862px;background:linear-gradient(180deg,rgba(7,7,7,.62) 0%%,rgba(7,7,7,0) 24%%,rgba(7,7,7,0) 52%%,rgba(7,7,7,.78) 80%%,%(dark)s 100%%)}
+.withphoto .main{top:600px;bottom:190px;justify-content:flex-end;gap:22px}
+.withphoto .head{font-size:78px}
+.withphoto .sub{font-size:34px}
 """
 
 FIT_JS = """<script>
@@ -480,13 +507,16 @@ def stripe_html(b):
     return "<div class='stripe'>" + "".join(f"<span style='background:{c}'></span>" for c in (b["red"], b["accent"], b["lime"], b["green"])) + "</div>"
 
 
-def page(body, w=CW, h=CH, extra_css="", pillar=None, motif=True):
+def page(body, w=CW, h=CH, extra_css="", pillar=None, motif=True, photo=""):
     b = brand()
+    if photo:
+        motif = False
+        body = f"<img class='ph' src='{esc(photo)}' alt=''><div class='phshade'></div>" + body
     t = tone(pillar) if pillar else b["accent"]
     css = BASE_CSS % {"w": w, "h": h, "dark": b["dark"], "accent": b["accent"], "green": b["green"], "text": b["text"], "muted": b["muted"], "display": DISPLAY, "body": BODY}
     bar = "<div class='bar'>" + "".join(f"<span style='background:{c}'></span>" for c in (b["red"], b["accent"], b["lime"], b["green"])) + "</div>"
     return (f"<!doctype html><html><head><meta charset='utf-8'>{FONTS_LINK}<style>:root{{--tone:{t};--ink:{ink_on(t)}}}{css}{extra_css}</style></head>"
-            f"<body><div class='bg'></div><div class='grain'></div>{motif_svg(b) if motif else ''}{body}{bar}{FIT_JS}</body></html>")
+            f"<body class='{'withphoto' if photo else ''}'><div class='bg'></div><div class='grain'></div>{motif_svg(b) if motif else ''}{body}{bar}{FIT_JS}</body></html>")
 
 
 def top_html():
@@ -537,8 +567,10 @@ def card_html(post):
         meta = f"{d.strftime('%a, %b')} {d.day}" + (f" · {post.get('place')}" if post.get("place") else "")
     if post.get("source"):
         meta = (meta + " · " if meta else "") + f"via {post['source']}"
-    body = f"""{top_html()}<div class='main'>{chip_html(chip)}{head_html(head)}{stripe_html(b)}{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}{f"<div class='sub'>{esc(first_words(sub, 40))}</div>" if sub else ""}</div>{foot_html('Details at the link' if post.get('kind') == 'community' else None)}"""
-    return page(body, pillar=pillar)
+    # our own photo behind the card; never for community news (it isn't our photo of that story)
+    photo = "" if post.get("kind") == "community" else pick_photo(PILLAR_PHOTO_TAGS.get(pillar, ["station"]), post.get("id", head), post.get("headline", ""))
+    body = f"""{top_html()}<div class='main'>{chip_html(chip)}{head_html(head)}{stripe_html(b)}{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}{f"<div class='sub'>{esc(first_words(sub, 28 if photo else 40))}</div>" if sub else ""}</div>{foot_html('Details at the link' if post.get('kind') == 'community' else None)}"""
+    return page(body, pillar=pillar, photo=photo)
 
 
 def render_card(post, out_dir):
@@ -549,8 +581,9 @@ def render_card(post, out_dir):
 
 def show_card_html(show):
     when = f"{DAY_PLURAL.get(show['day'], show['day'])} · {fmt12(show['start'])} ET"
+    photo = pick_photo(["shows", "station"], show["show"], show["show"])
     body = f"""{top_html()}<div class='main'>{chip_html('On air')}{head_html(show['show'])}{stripe_html(brand())}<div class='meta'>{esc(when)}</div><div class='sub'>{esc(show.get('description', ''))}</div></div>{foot_html('Tune in')}"""
-    return page(body, pillar='reminder')
+    return page(body, pillar='reminder', photo=photo)
 
 
 DAY_PLURAL = {"Sun": "Sundays", "Mon": "Mondays", "Tue": "Tuesdays", "Wed": "Wednesdays", "Thu": "Thursdays", "Fri": "Fridays", "Sat": "Saturdays"}
@@ -621,7 +654,7 @@ def make_weekly(tasks, out_dir):
     if want.get("lineup", True) and shows:
         slides = [slide_cover("This week on " + st["name"], "This week", "Music for a while, then a program or two.", pillar="program")]
         for i, s in enumerate(shows[:6], 1):
-            slides.append(slide_item(i, s["show"], f"{DAY_PLURAL.get(s['day'], s['day'])} · {fmt12(s['start'])} ET", s.get("description", ""), pillar="program"))
+            slides.append(slide_item(i, s["show"], f"{DAY_PLURAL.get(s['day'], s['day'])} · {fmt12(s['start'])} ET", s.get("description", ""), pick_photo(["shows"], s["show"] + wk["monday"], s["show"]), pillar="program"))
         slides.append(slide_cta("Listen live", "Set a reminder and tune in."))
         files = render_slides(slides, out_dir, "lineup")
         tx = carousel_texts("lineup", [{"show": s["show"], "day": s["day"], "time": fmt12(s["start"]) + " ET"} for s in shows])
@@ -651,7 +684,7 @@ def make_weekly(tasks, out_dir):
     if want.get("rotation", True) and len(artists) >= 2:
         slides = [slide_cover("The Rare Breed rotation", "On air now", "Artists who sent us their music. Played with permission.")]
         for i, a in enumerate(artists[:6], 1):
-            slides.append(slide_item(i, a["name"], " · ".join(x for x in [a.get("genre", ""), a.get("city", "")] if x), f"Listen for “{a['song']}”." if a.get("song") else "", a.get("image", "")))
+            slides.append(slide_item(i, a["name"], " · ".join(x for x in [a.get("genre", ""), a.get("city", "")] if x), f"Listen for “{a['song']}”." if a.get("song") else "", a.get("image", "") or pick_photo([], a["name"], a["name"])))
         slides.append(slide_cta("Hear them live", "New music every day on " + st["name"] + "."))
         files = render_slides(slides, out_dir, "rotation")
         tx = carousel_texts("rotation", [{k: a.get(k, "") for k in ("name", "genre", "song", "city")} for a in artists[:6]])
@@ -808,7 +841,7 @@ def artist_promo(a, out_dir):
     info = probe(audio)
     if info["duration"] and info["duration"] < start + dur:
         start = max(0.0, info["duration"] - dur)
-    bg = audiogram_bg(a["name"], f"“{a['song']}” · now on {st['name']}" if a.get("song") else f"Now on {st['name']}", tmp / f"promo-{slugify(a['name'])}.png", a.get("image", ""))
+    bg = audiogram_bg(a["name"], f"“{a['song']}” · now on {st['name']}" if a.get("song") else f"Now on {st['name']}", tmp / f"promo-{slugify(a['name'])}.png", a.get("image", "") or pick_photo([], a["name"], a["name"]))
     out = tmp / f"promo-{slugify(a['name'])}.mp4"
     ov = overlay_png("New on rotation", tmp / f"ov-promo-{slugify(a['name'])}.png")
     fc = (f"[1:v]scale={W}:{H}[bg];[0:a]asplit[w][au];[w]showwaves=s=880x200:mode=cline:rate=30:colors={brand()['accent']}[wv];"
@@ -937,9 +970,10 @@ def process_clip_job(job, out_dir):
 # MAKE
 # ---------------------------------------------------------------------------
 def make():
-    global SETTINGS
+    global SETTINGS, PHOTOS
     tasks = api("tasks")
     SETTINGS = tasks["settings"]
+    PHOTOS = [p for p in tasks.get("photos") or [] if str(p.get("url", "")).startswith("https://")]
     out_dir = WORK / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
     done = {"cards": 0, "showcards": 0, "carousels": 0, "promos": 0, "stories": 0, "jobs": 0}
