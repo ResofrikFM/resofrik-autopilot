@@ -105,6 +105,10 @@ const DEFAULT_SETTINGS = {
   },
   community: {
     enabled: true,
+    musicVideo: true, // news posts go out as short videos with music from the music library
+    // the studio's neighbourhood: news that mentions these towns is scored higher than Cleveland-wide news
+    localPlaces: ["Oakwood Village", "Oakwood", "Bedford", "Bedford Heights", "Walton Hills", "Maple Heights", "Garfield Heights", "Richmond Heights", "Warrensville Heights", "Solon", "Valley View", "Independence", "Highland Hills", "North Randall"],
+    localBoost: 2,
     times: ["11:15", "16:15"],
     minScore: 6,
     autoApprove: true,
@@ -114,6 +118,22 @@ const DEFAULT_SETTINGS = {
     boostWords: ["festival", "free", "concert", "music", "art", "poetry", "community", "volunteer", "youth", "grant", "workshop", "library", "market", "celebration", "open mic", "neighborhood", "job fair", "resource", "family", "culture", "african", "caribbean", "juneteenth", "heritage"],
   },
   sources: [
+    // the towns around the studio first: city halls' own news, then every outlet's coverage via Google News
+    { name: "City of Bedford", url: "https://bedfordoh.gov/feed/", type: "rss", region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "Oakwood Village", url: "https://www.oakwoodvillageoh.com/category/news/feed/", type: "rss", region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "City of Maple Heights", url: "https://mapleheightsohio.gov/category/news/feed/", type: "rss", region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "City of Garfield Heights", url: "https://www.garfieldhts.org/RSSFeed.aspx?ModID=1&CID=All-newsflash.xml", type: "rss", region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "City of Richmond Heights", url: "https://www.richmondheightsohio.org/RSSFeed.aspx?ModID=1&CID=All-newsflash.xml", type: "rss", region: "East suburbs", autoPost: true, enabled: true },
+    { name: "The Neighborhood News", url: "https://theneighborhoodnews.com/feed/", type: "rss", region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "News: Bedford", url: '"Bedford, Ohio" OR "Bedford, OH" OR "Bedford City Schools"', type: "gnews", mustMention: ["Bedford"], mustNotMention: ["England", "UK", "Bedfordshire", "Massachusetts", "Texas", "Virginia", "Indiana", "Iowa", "Pennsylvania", "New Hampshire", "New York", "Kentucky", "Nova Scotia"], region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "News: Oakwood Village", url: '"Oakwood Village" Ohio', type: "gnews", mustMention: ["Oakwood"], region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "News: Maple Heights", url: '"Maple Heights"', type: "gnews", mustMention: ["Maple Heights"], region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "News: Garfield Heights", url: '"Garfield Heights"', type: "gnews", mustMention: ["Garfield Heights"], region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "News: Bedford Heights", url: '"Bedford Heights"', type: "gnews", mustMention: ["Bedford Heights"], region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "News: Walton Hills", url: '"Walton Hills"', type: "gnews", mustMention: ["Walton Hills"], region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "News: Richmond Heights", url: '"Richmond Heights" Ohio', type: "gnews", mustMention: ["Richmond Heights"], mustNotMention: ["Missouri", "Florida", "St. Louis", "Miami"], region: "East suburbs", autoPost: true, enabled: true },
+    { name: "News: Warrensville Heights", url: '"Warrensville Heights"', type: "gnews", mustMention: ["Warrensville"], region: "Southeast suburbs", autoPost: true, enabled: true },
+    { name: "News: Solon", url: '"Solon, Ohio" OR "Solon City Schools"', type: "gnews", mustMention: ["Solon"], mustNotMention: ["Iowa", "Maine"], region: "Southeast suburbs", autoPost: true, enabled: true },
     { name: "Signal Cleveland", url: "https://signalcleveland.org/feed/", type: "rss", region: "Northeast Ohio", autoPost: true, enabled: true },
     { name: "Cuyahoga Land Bank (City of Cleveland news)", url: "https://cuyahogalandbank.org/blog/tag/city-of-cleveland/feed/", type: "rss", region: "Northeast Ohio", autoPost: true, enabled: true },
     { name: "Cleveland Scene", url: "https://www.clevescene.com/feed/", type: "rss", region: "Northeast Ohio", autoPost: false, enabled: true },
@@ -940,6 +960,7 @@ function pick(n, arr) {
 async function ingestItems(env, settings, items) {
   let added = 0;
   const srcByName = Object.fromEntries((settings.sources || []).map((s) => [s.name, s]));
+  const places = (settings.community.localPlaces || []).filter(Boolean);
   for (const it of items || []) {
     if (!it || !it.url || !it.title) continue;
     const id = await hashId(it.url);
@@ -948,7 +969,8 @@ async function ingestItems(env, settings, items) {
     const blocked = (settings.community.blockWords || []).some((w) => w && new RegExp(`\\b${escapeRe(w.toLowerCase())}\\b`).test(text));
     let score = Number(it.score);
     if (!isFinite(score)) score = 5 + (settings.community.boostWords || []).filter((w) => text.includes(w.toLowerCase())).length;
-    const src = srcByName[it.source] || {};
+    if (places.some((pl) => new RegExp(`\\b${escapeRe(pl.toLowerCase())}\\b`).test(text))) score += Number(settings.community.localBoost ?? 2);
+    const src = srcByName[it.feed] || srcByName[it.source] || {};
     const status = blocked ? "skipped" : it.submitted ? "review" : "new";
     const data = {
       id,
@@ -1552,7 +1574,9 @@ async function testFacebook(env) {
   return "Connected to Page: " + d.name;
 }
 function igCaption(settings, post) {
-  const linkLine = post.linkExternal && post.source ? `Details: ${post.source} (link in our bio)` : `Listen live at ${settings.station.linkLabel} (link in bio)`;
+  const linkLine = post.kind === "community" || (post.linkExternal && post.source)
+    ? `Full story${post.source ? ` from ${post.source}` : ""}: tap the link in our bio, then "In the news".`
+    : `Listen live: tap the link in our bio (${settings.station.linkLabel}).`;
   return fit((post.long || shortText(post)) + "\n\n" + linkLine, 2200);
 }
 async function publishInstagram(env, settings, post) {
@@ -1762,6 +1786,7 @@ async function handleStudio(request, env, url) {
       seenFeedEntries: await kvJson(env, "feeds:seen", []),
       stories: settings.studio.stories && settings.studio.stories.enabled === false ? null : await storyPlan(env, settings, now),
       photos: (await listPhotos(env)).map(({ url, tag, about, credit }) => ({ url, tag, about, credit })),
+      music: (await listMusic(env)).map(({ genre, url }) => ({ genre, url })),
       transcribe: (await loadEpisodes(env)).filter((e) => e.video && !e.transcript).slice(0, 6).map((e) => ({ id: episodeId(e), video: e.video, poet: e.poet, title: e.title })),
       nowPlayingCards: settings.nowPlaying.enabled ? await (async () => { const cards = await kvJson(env, "np:cards", {}); return (await kvJson(env, "np:seen", [])).filter((x) => !cards[x.track]).slice(-12); })() : [],
     });
@@ -2080,7 +2105,7 @@ function publicArtists(settings) {
   return { featured: list.length ? list[week % list.length] : null, artists: list };
 }
 
-function linksPage(env, settings, board, media, msg) {
+function linksPage(env, settings, board, media, msg, news = []) {
   const st = settings.station;
   const go = (id) => `/go/links/${id}`;
   return page(
@@ -2088,6 +2113,7 @@ function linksPage(env, settings, board, media, msg) {
     `<main class="links"><section class="hero">${st.logoUrl ? `<img src="${esc(st.logoUrl)}" alt="${esc(st.name)} logo" class="logo">` : ""}<h1>${esc(st.name)}</h1><p class="tag">${esc(st.slogan)}</p></section>
 ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
 <a class="big" href="${go("listen")}">▶ Listen live</a>
+${news.length ? `<section id="news"><h2>In the news</h2><p class="small">The full stories behind our posts, newest first.</p>${news.map((n) => `<a class="ev" href="/go/${esc(n.id)}/bio" rel="noopener"><b>${esc(n.headline || shortText(n))}</b><span>${n.source ? "via " + esc(n.source) + " · " : ""}${esc(new Date(n.when).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: settings.station.timezone }))}</span></a>`).join("")}</section>` : ""}
 ${st.donateUrl ? `<a class="big alt" href="${esc(st.donateUrl)}" onclick="navigator.sendBeacon && navigator.sendBeacon('/api/public/click/links/donate')">♥ Support the station</a>` : ""}
 <section><h2>Join the list</h2><p class="small">New shows, new music and community news. No spam.</p>
 <form method="post" action="/api/public/subscribe"><input type="email" name="email" placeholder="you@email.com" required aria-label="Email"><input type="text" name="name" placeholder="First name (optional)" aria-label="First name"><input type="hidden" name="source" value="links"><button>Sign me up</button></form></section>
@@ -2211,7 +2237,8 @@ async function handleHttp(request, env, ctx) {
   }
   if (p === "/links") {
     const settings = await loadSettings(env);
-    return html(linksPage(env, settings, await publicEvents(env, settings), await publicMedia(env, settings), url.searchParams.get("msg")));
+    const news = await queryPosts(env, "WHERE kind = 'community' AND status IN ('published','partial') ORDER BY when_ms DESC LIMIT 10");
+    return html(linksPage(env, settings, await publicEvents(env, settings), await publicMedia(env, settings), url.searchParams.get("msg"), news));
   }
   if (!env.ADMIN_PASSWORD) return html(page("Setup needed", `<main><section><p>Add a secret named <b>ADMIN_PASSWORD</b> to this Worker, then reload.</p></section></main>`));
   if (p === "/login" && request.method === "POST") {
