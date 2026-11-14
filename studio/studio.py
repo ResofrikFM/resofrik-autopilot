@@ -1079,6 +1079,15 @@ def make():
             done["cards"] += 1
         except Exception as e:
             say("card failed:", c.get("id"), e)
+    for sp in tasks.get("storyPosters", [])[:12]:
+        try:
+            vid = download(sp["video"], out_dir / f"sp-{sp['postId']}.mp4")
+            jpg = out_dir / f"sp-{sp['postId']}.jpg"
+            ff("-ss", "1.2", "-i", vid, "-frames:v", "1", "-q:v", "3", jpg)  # just after the opening fade
+            api("story-poster", {"postId": sp["postId"], "url": upload(jpg)})
+            done["covers"] = done.get("covers", 0) + 1
+        except Exception as e:
+            say("story cover failed:", sp.get("postId"), e)
     for ep in tasks.get("transcribe", [])[:6]:
         try:
             vid = download(ep["video"], out_dir / f"ep-{ep['id']}.mp4")
@@ -1265,8 +1274,13 @@ def make_stories(tasks, out_dir):
         try:
             mp4, secs = story_video(story, pick_track(plan.get("music") or [], story.get("music", "")), out_dir)
             caps = story_captions(story)
+            try:  # the opening card is the cover the website shows before Play
+                poster = upload(to_jpg(out_dir / f"st-{story['id']}-0.png", out_dir / f"st-{story['id']}-cover.jpg"))
+            except Exception as e:
+                poster = ""
+                say("story cover failed:", e)
             api("post", {"kind": "story", "pillar": "music", "headline": story["artist"], "short": caps["bluesky"], "long": caps["facebook"], "variants": caps,
-                         "story": {k: story.get(k) for k in ("id", "artist", "genre", "hook", "beats", "payoff", "question", "source")},
+                         "story": {**{k: story.get(k) for k in ("id", "artist", "genre", "hook", "beats", "payoff", "question", "source")}, "poster": poster},
                          "media": {"type": "video", "urls": [upload(mp4)]}, "whenLocal": {"date": date, "time": plan.get("time", "19:30")}, "platforms": plan.get("platforms")})
             api("story-used", {"id": story["id"]})
             last_music = story.get("music")
