@@ -503,11 +503,6 @@ body{font-family:%(body)s;color:%(text)s;background:%(dark)s;position:relative;-
 .bar{position:absolute;left:0;right:0;bottom:0;height:16px;display:flex}.bar span{flex:1}
 .ph{position:absolute;left:0;top:0;width:100%%;height:860px;object-fit:cover;object-position:center 35%%}
 .phshade{position:absolute;left:0;right:0;top:0;height:862px;background:linear-gradient(180deg,rgba(7,7,7,.62) 0%%,rgba(7,7,7,0) 24%%,rgba(7,7,7,0) 52%%,rgba(7,7,7,.78) 80%%,%(dark)s 100%%)}
-.bd{position:absolute;left:0;top:0;width:100%%;height:100%%;object-fit:cover;transform-origin:var(--bdo,50%% 50%%);transform:scale(var(--bdz,1))}
-.bdshade{position:absolute;inset:0}
-.bd-sign .bdshade{background:linear-gradient(180deg,rgba(7,7,7,.05) 0%%,rgba(7,7,7,.08) 26%%,rgba(7,7,7,.80) 36%%,rgba(7,7,7,.86) 70%%,rgba(7,7,7,.93) 100%%)}
-.bd-sign .top{display:none}.bd-sign .main{top:470px}
-.bd-desk .bdshade{background:linear-gradient(180deg,rgba(7,7,7,.88) 0%%,rgba(7,7,7,.70) 26%%,rgba(7,7,7,.80) 55%%,rgba(7,7,7,.93) 100%%)}
 .withphoto .main{top:600px;bottom:190px;justify-content:flex-end;gap:22px}
 .withphoto .head{font-size:78px}
 .withphoto .sub{font-size:34px}
@@ -541,20 +536,9 @@ def head_colors(seed=""):
     return pair[int(hashlib.sha1(str(seed).encode()).hexdigest(), 16) % 2]
 
 
-# How the studio backdrop sits behind a card: the neon sign up top (it stands in for the logo),
-# or a close-up of the mics, window and table. Picked by post id so the feed varies.
-BACKDROP_LOOKS = [("sign", "1", "50% 0%"), ("desk", "1.55", "50% 90%")]
-
-
-def page(body, w=CW, h=CH, extra_css="", pillar=None, motif=True, photo="", seed="", backdrop=""):
+def page(body, w=CW, h=CH, extra_css="", pillar=None, motif=True, photo="", seed=""):
     b = brand()
     headc, emc = head_colors(seed)
-    look = ""
-    if backdrop and not photo:
-        motif = False
-        n = int(hashlib.sha1(("bd" + str(seed)).encode()).hexdigest()[:8], 16)
-        look, zoom, origin = BACKDROP_LOOKS[n % len(BACKDROP_LOOKS)]
-        body = f"<img class='bd' src='{esc(backdrop)}' alt='' style='--bdz:{zoom};--bdo:{origin}'><div class='bdshade'></div>" + body
     if photo:
         motif = False
         body = f"<img class='ph' src='{esc(photo)}' alt=''><div class='phshade'></div>" + body
@@ -562,7 +546,7 @@ def page(body, w=CW, h=CH, extra_css="", pillar=None, motif=True, photo="", seed
     css = BASE_CSS % {"w": w, "h": h, "dark": b["dark"], "accent": b["accent"], "green": b["green"], "text": b["text"], "muted": b["muted"], "display": DISPLAY, "body": BODY}
     bar = "<div class='bar'>" + "".join(f"<span style='background:{c}'></span>" for c in (b["red"], b["accent"], b["lime"], b["green"])) + "</div>"
     return (f"<!doctype html><html><head><meta charset='utf-8'>{FONTS_LINK}<style>:root{{--tone:{t};--ink:{ink_on(t)};--headc:{headc};--emc:{emc}}}{css}{extra_css}</style></head>"
-            f"<body class='{'withphoto' if photo else ('bd-' + look if look else '')}'><div class='bg'></div><div class='grain'></div>{motif_svg(b) if motif else ''}{body}{bar}{FIT_JS}</body></html>")
+            f"<body class='{'withphoto' if photo else ''}'><div class='bg'></div><div class='grain'></div>{motif_svg(b) if motif else ''}{body}{bar}{FIT_JS}</body></html>")
 
 
 def top_html():
@@ -628,14 +612,9 @@ def card_html(post):
     if post.get("source"):
         meta = (meta + " · " if meta else "") + f"via {post['source']}"
     # our own photo behind the card; never for community news (it isn't our photo of that story)
-    tags = PILLAR_PHOTO_TAGS.get(pillar, ["station"])
-    if any(p.get("tag") == "backdrop" for p in PHOTOS):
-        tags = [t for t in tags if t != "station"]  # the studio backdrop beats a generic station photo
-    photo = "" if post.get("kind") == "community" else pick_photo(tags, post.get("id", head), post.get("headline", ""))
+    photo = "" if post.get("kind") == "community" else pick_photo(PILLAR_PHOTO_TAGS.get(pillar, ["station"]), post.get("id", head), post.get("headline", ""))
     body = f"""{top_html()}<div class='main'>{chip_html(chip)}{head_html(head)}{stripe_html(b)}{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}{f"<div class='sub'>{esc(first_words(sub, 28 if photo else 40))}</div>" if sub else ""}</div>{foot_html('Full story at' if post.get('kind') == 'community' else None, label=b['label'] + '/links' if post.get('kind') == 'community' else None)}"""
-    # no photo of our own for this post: the studio itself goes behind it (library tag "backdrop")
-    backdrop = "" if photo else pick_photo(["backdrop"], post.get("id", head))
-    return page(body, pillar=pillar, photo=photo, seed=post.get("id", head), backdrop=backdrop)
+    return page(body, pillar=pillar, photo=photo, seed=post.get("id", head))
 
 
 def render_card(post, out_dir):
