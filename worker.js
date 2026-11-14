@@ -19,6 +19,7 @@
 
 const VERSION = "2.0.0";
 const WEEKLY_CRON = "0 22 * * 6";
+const LIVE_CRON = "* * * * *"; // every minute: is the studio streaming right now?
 
 // Free plan allows 50 outside requests per run. We count ours and stop early, finishing next run.
 let SUBREQ = 0;
@@ -91,6 +92,17 @@ const DEFAULT_SETTINGS = {
     platforms: ["bluesky", "threads", "mastodon", "telegram"],
     requireCard: true, // only post songs the Studio has already made a picture card for
   },
+  live: {
+    enabled: false, // turn on once the Cloudflare Stream live input exists
+    customerCode: "", // from the Stream dashboard: customer-XXXX.cloudflarestream.com, the XXXX part
+    inputId: "", // the live input's ID
+    title: "All These Things with Papa Tee",
+    pageUrl: "https://resofrikfm.com/live/",
+    teaser: true, // post "we're live" on social when the stream starts
+    minGapMinutes: 180, // never post two teasers closer than this (covers dropped connections)
+    image: "", // picture for the teaser; empty = a show photo from the library
+    platforms: ["facebook", "instagram", "threads", "bluesky", "mastodon", "telegram"],
+  },
   community: {
     enabled: true,
     times: ["11:15", "16:15"],
@@ -157,6 +169,7 @@ async function runScheduled(cron, env) {
   env = await withPageToken(env);
   MEDIA_ENV = env;
   if (cron === WEEKLY_CRON) await weeklyJob(env, { force: false });
+  else if (cron === LIVE_CRON) await liveCheck(env, await loadSettings(env), Date.now()).catch((e) => log(env, "error", `Live check: ${e.message}`));
   else await tick(env);
 }
 
@@ -515,6 +528,99 @@ async function nowPlaying(env, settings, now) {
   await reportPost(env, settings, post);
   await kvPut(env, "np:state", JSON.stringify({ date: today, count: countToday + 1, lastAt: now, lastTrack: track }));
   return 1;
+}
+// ---------------------------------------------------------------------------
+// Live video: Cloudflare Stream. The site's Live page and banner read
+// /api/public/live; the every-minute check posts the "we're live" teaser.
+// ---------------------------------------------------------------------------
+function liveBase(lv) {
+  const code = String(lv.customerCode || "").replace(/^https?:\/\//, "").replace(/^customer-/, "").replace(/\.cloudflarestream\.com.*$/, "").trim();
+  const id = String(lv.inputId || "").trim();
+  return code && /^[a-z0-9]+$/i.test(code) && /^[a-f0-9]{32}$/i.test(id) ? `https://customer-${code}.cloudflarestream.com` : "";
+}
+async function liveStatus(settings) {
+  const lv = settings.live || {};
+  const base = liveBase(lv);
+  if (!lv.enabled || !base) return { configured: false, live: false };
+  const res = await xfetch(`${base}/${lv.inputId.trim()}/lifecycle`, { cf: { cacheTtl: 10 } });
+  if (!res.ok) throw new Error(`Stream lifecycle ${res.status}`);
+  const j = await res.json();
+  return { configured: true, live: !!j.live, videoUID: j.videoUID || null };
+}
+function liveTeaserText(settings, n) {
+  const lv = settings.live, st = settings.station;
+  const t = lv.title || st.name;
+  return [
+    `🔴 LIVE NOW: ${t}. Watch the full show and join the chat at ${st.linkLabel || "resofrikfm.com"}/live`,
+    `We're live on ${st.name} 🔴 ${t} is on right now. Pull up a chair: ${st.linkLabel || "resofrikfm.com"}/live`,
+    `On the air and on camera 🔴 ${t}, live from the studio. ${st.slogan}. Watch at ${st.linkLabel || "resofrikfm.com"}/live`,
+  ][n % 3];
+}
+async function liveCheck(env, settings, now) {
+  if (settings.paused) return 0;
+  const s = await liveStatus(settings);
+  if (!s.configured) return 0;
+  const state = await kvJson(env, "live:state", {});
+  if (s.live) {
+    if (!state.live) {
+      state.live = true;
+      state.since = now;
+      state.offCount = 0;
+      if (s.videoUID) state.videoUID = s.videoUID;
+      await log(env, "info", "Live: the studio stream started");
+      const lv = settings.live;
+      if (lv.teaser !== false && !(state.lastTeaserAt && now - state.lastTeaserAt < (lv.minGapMinutes || 180) * 60000)) {
+        let img = lv.image || "";
+        if (!img) {
+          const photos = (await listPhotos(env)).filter((x) => x.tag === "shows" || x.tag === "station");
+          const show = photos.filter((x) => /all these things/i.test(x.about));
+          const pool = show.length ? show : photos;
+          if (pool.length) img = pool[Math.floor(now / 60000) % pool.length].url;
+        }
+        const n = state.teasers || 0;
+        const text = liveTeaserText(settings, n);
+        const post = normalizePost({ id: newId(), kind: "live", when: now, status: "scheduled", pillar: "program", short: text, long: text, link: lv.pageUrl || settings.station.website, media: img ? { type: "image", urls: [img] } : { type: "none", urls: [] }, platforms: lv.platforms, results: {}, createdAt: now });
+        await publishPost(env, settings, post);
+        await savePost(env, post);
+        state.lastTeaserAt = now;
+        state.teasers = n + 1;
+      }
+    } else if (s.videoUID) state.videoUID = s.videoUID;
+  } else if (state.live) {
+    // two quiet checks in a row before calling it over: OBS reconnects after a blip
+    state.offCount = (state.offCount || 0) + 1;
+    if (state.offCount >= 2) {
+      state.live = false;
+      state.endedAt = now;
+      if (state.videoUID) state.lastVideo = state.videoUID;
+      state.videoUID = null;
+      await log(env, "info", "Live: the studio stream ended");
+    }
+  } else return 0;
+  await kvPut(env, "live:state", JSON.stringify(state));
+  return 1;
+}
+async function publicLive(env, settings) {
+  const lv = settings.live || {};
+  const base = liveBase(lv);
+  const state = await kvJson(env, "live:state", {});
+  let s = { configured: false, live: false };
+  try {
+    s = await liveStatus(settings);
+  } catch {
+    s = { configured: !!base && !!lv.enabled, live: !!state.live };
+  }
+  const id = String(lv.inputId || "").trim();
+  return {
+    configured: s.configured,
+    live: s.live,
+    since: s.live ? state.since || null : null,
+    title: lv.title || settings.station.name,
+    player: s.configured ? `${base}/${id}/iframe` : "",
+    replay: s.configured && state.lastVideo ? `${base}/${state.lastVideo}/iframe` : "",
+    replayPoster: s.configured && state.lastVideo ? `${base}/${state.lastVideo}/thumbnails/thumbnail.jpg?time=60s&height=480` : "",
+    endedAt: state.endedAt || null,
+  };
 }
 function parseSongs(body) {
   // AzuraCast: the song on air now, the next one and the last few, with their artwork
@@ -2005,6 +2111,7 @@ async function handlePublic(request, env, url) {
   if (p === "/api/public/photos") return json((await listPhotos(env)).filter((x) => x.tag === "station" || x.tag === "shows").map(({ url, tag, about }) => ({ url, tag, about })), 200, { ...CORS, "cache-control": "public, max-age=900" });
   if (p === "/api/public/originals") return json((await loadEpisodes(env)).filter((e) => e.video && !e.hidden).map(({ transcript, hidden, ...e }) => e), 200, { ...CORS, "cache-control": "public, max-age=300" });
   if (p === "/api/public/artists") return json(publicArtists(settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
+  if (p === "/api/public/live") return json(await publicLive(env, settings), 200, { ...CORS, "cache-control": "public, max-age=15" });
   if (p.startsWith("/api/public/click/")) {
     const [, , , , postId, platform] = p.split("/");
     await countClick(env, postId || "links", platform || "web");
@@ -2629,7 +2736,7 @@ ${report ? `<details><summary>Last weekly report</summary><pre class="small">${e
 <section id="conn"><h2>Connections</h2><table>${Object.entries(PLATFORMS).map(([k, p]) => `<tr><td><b>${esc(p.label)}</b></td><td>${p.ready(env) ? `<span class="pill ok">connected</span>` : `<span class="pill">not set up</span>`}</td><td class="small">${esc(p.help)}</td><td>${p.ready(env) ? `<form method="post" action="/action"><input type="hidden" name="anchor" value="conn"><input type="hidden" name="platform" value="${k}"><button class="ghost" name="do" value="test">Test</button></form>` : ""}</td></tr>`).join("")}</table>
 <p class="small">Also: <b>MEDIA</b> (R2 bucket) ${env.MEDIA ? "✓" : "✗"} · <b>STUDIO_TOKEN</b> ${env.STUDIO_TOKEN ? "✓" : "✗"} · <b>ANTHROPIC_API_KEY</b> ${env.ANTHROPIC_API_KEY ? "✓" : "✗"} · <b>PUBLIC_URL</b> ${env.PUBLIC_URL ? "✓" : "✗"} · alerts ${env.NOTIFY_TELEGRAM_CHAT_ID || env.NOTIFY_DISCORD_WEBHOOK ? "✓" : "✗"} · Run-Studio button ${env.GH_DISPATCH_TOKEN && env.GH_REPO ? "✓" : "✗"}</p></section>
 
-<section id="settings"><h2>Settings</h2><p class="small">Everything the team knows about the station. Change the words between the quote marks and press Save. Most useful: <b>schedule</b> (show day/time, active: true), <b>artists</b> (with <i>image</i> and <i>audio</i> links for promo videos), <b>sources</b> (local feeds to watch), <b>studio.videoFeeds</b> (your podcast/YouTube feeds to clip automatically), <b>station.logoUrl</b>, <b>donateUrl</b>, <b>signupUrl</b>, and <b>nowPlaying.url</b> (your AzuraCast now-playing link).</p>
+<section id="settings"><h2>Settings</h2><p class="small">Everything the team knows about the station. Change the words between the quote marks and press Save. Most useful: <b>schedule</b> (show day/time, active: true), <b>artists</b> (with <i>image</i> and <i>audio</i> links for promo videos), <b>sources</b> (local feeds to watch), <b>studio.videoFeeds</b> (your podcast/YouTube feeds to clip automatically), <b>station.logoUrl</b>, <b>donateUrl</b>, <b>signupUrl</b>, <b>nowPlaying.url</b> (your AzuraCast now-playing link), and <b>live</b> (your Cloudflare Stream customer code and live input ID; the website's Live page and the "we're live" posts use it).</p>
 <form method="post" action="/action"><input type="hidden" name="anchor" value="settings"><textarea class="code" name="settings" spellcheck="false">${esc(JSON.stringify(settings, null, 2))}</textarea>
 <div class="row" style="margin-top:10px"><button name="do" value="save_settings">Save settings</button><button class="danger" name="do" value="reset_settings" onclick="return confirm('Reset all settings to the starting defaults?')">Reset to defaults</button></div></form></section>
 <p class="small" style="text-align:center">Resofrik Autopilot ${VERSION}</p></main>`;
