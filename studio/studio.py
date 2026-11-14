@@ -282,6 +282,18 @@ def fetch_source(src):
         acct = json.loads(http(f"{base}/api/v1/accounts/lookup?acct={name}")[0])
         sts = json.loads(http(f"{base}/api/v1/accounts/{acct['id']}/statuses?limit=25&exclude_replies=true&exclude_reblogs=true")[0])
         return [{"title": first_words(strip_html(s.get("content")), 14), "url": s.get("url"), "summary": strip_html(s.get("content")), "published": parse_date(s.get("created_at", "")), "image": (s.get("media_attachments") or [{}])[0].get("preview_url", "")} for s in sts]
+    if typ == "gnews":
+        # Google News search for one town: catches coverage from every local outlet, credited to its publisher
+        feed = "https://news.google.com/rss/search?" + urllib.parse.urlencode({"q": f"{url} when:7d", "hl": "en-US", "gl": "US", "ceid": "US:en"})
+        raw, _ = http(feed)
+        items = parse_feed(raw)
+        for it in items:
+            m = re.match(r"^(.*\S)\s+-\s+([^-]{2,70})$", it["title"])
+            if m:
+                it["title"], it["publisher"] = m.group(1).strip(), m.group(2).strip()
+            it["summary"] = ""  # Google's description only repeats the headline
+            it["image"] = ""
+        return items
     raw, _ = http(url)
     if typ == "ics" or raw.lstrip().startswith(b"BEGIN:VCALENDAR"):
         return parse_ics(raw.decode("utf-8", "replace"))
@@ -306,6 +318,7 @@ def ai_enrich(items, settings):
     st = settings["station"]
     sys_prompt = (
         f"You are the community desk editor for {st['name']}, a nonprofit community radio station in {st['city']}. "
+        f"The studio is in {st.get('home', 'Oakwood Village and Bedford, southeast of Cleveland')}; news from these towns matters most to listeners: {', '.join((settings.get('community') or {}).get('localPlaces', [])) or 'Bedford, Oakwood, Maple Heights, Garfield Heights'}. Score their items higher than Cleveland-wide news. "
         "You pick local items worth sharing with listeners and write them up in the station's own words. "
         "Keep: events, opportunities, resources, arts, music, culture, youth, neighborhood good news, useful civic info. "
         "Drop: crime, accidents, tragedy, lawsuits, partisan politics, ads, anything unclear. "
@@ -333,7 +346,7 @@ def scout():
     # community words come from the worker defaults when present
     block = [w.lower() for w in (full.get("community") or {}).get("blockWords", [])] or ["shooting", "shot", "killed", "homicide", "murder", "crash", "fatal", "arrest", "indicted"]
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=7)
-    report, collected = [], []
+    report, collected, seen_titles = [], [], set()
     for src in settings.get("sources", []):
         if not src.get("enabled", True):
             continue
@@ -346,9 +359,18 @@ def scout():
                 text = f"{it['title']} {it.get('summary', '')}".lower()
                 if any(re.search(rf"\b{re.escape(w)}\b", text) for w in block):
                     continue
+                must = [m.lower() for m in src.get("mustMention") or []]
+                if must and not any(m in text for m in must):
+                    continue  # keep only items that name our town
+                if any(re.search(rf"\b{re.escape(x.lower())}\b", text) for x in src.get("mustNotMention") or []):
+                    continue  # a search for "Bedford" also finds Bedford, England or Bedford, Texas
+                key = re.sub(r"[^a-z0-9]+", " ", it["title"].lower()).strip()[:90]
+                if key in seen_titles:
+                    continue  # the same story from two town searches
+                seen_titles.add(key)
                 if not it.get("url"):
                     it["url"] = f"{src['url']}#{hashlib.sha1(it['title'].encode()).hexdigest()[:10]}"
-                it["_src"] = src["name"]
+                it["_src"] = it.get("publisher") or src["name"]
                 it["_srcobj"] = src
                 fresh.append(it)
             collected.extend(fresh[:12])
@@ -370,7 +392,7 @@ def scout():
             continue
         h = e or heuristic_item(it, src, full)
         out.append({
-            "url": it["url"], "title": it["title"][:200], "source": src["name"], "region": h.get("region") or src.get("region", "Northeast Ohio"),
+            "url": it["url"], "title": it["title"][:200], "source": it["_src"], "feed": src["name"], "region": h.get("region") or src.get("region", "Northeast Ohio"),
             "summary": h.get("summary") or first_words(it.get("summary", ""), 32), "short": h.get("short", ""), "long": h.get("long", ""),
             "kind": h.get("kind") or ("event" if it.get("eventDate") else "news"), "eventDate": h.get("eventDate") or it.get("eventDate", ""),
             "place": h.get("place") or it.get("place", ""), "score": h.get("score", 5), "image": it.get("image", "") if (it.get("image", "") or "").startswith("https://") else "",
@@ -465,10 +487,10 @@ body{font-family:%(body)s;color:%(text)s;background:%(dark)s;position:relative;-
 .chip{display:inline-flex;align-items:center;gap:12px;background:var(--tone);color:var(--ink);font-family:%(body)s;font-weight:800;font-size:25px;letter-spacing:3px;text-transform:uppercase;padding:12px 22px 11px;border-radius:999px}
 .chip i{width:12px;height:12px;border-radius:50%%;background:var(--ink);opacity:.8}
 .main{position:absolute;left:72px;right:72px;top:390px;bottom:220px;display:flex;flex-direction:column;justify-content:center;gap:30px}
-.head{font-family:%(display)s;font-weight:700;line-height:1.06;font-size:96px;letter-spacing:-1.5px;text-wrap:balance}
-.head em{font-style:normal;color:var(--tone)}
+.head{font-family:%(display)s;font-weight:700;line-height:1.06;font-size:96px;letter-spacing:-1.5px;text-wrap:balance;color:var(--headc)}
+.head em{font-style:normal;color:var(--emc)}
 .stripe{display:flex;gap:8px}.stripe span{height:8px;width:56px;border-radius:8px}
-.sub{font-size:40px;line-height:1.38;color:%(muted)s;text-wrap:pretty;max-width:900px}
+.sub{font-size:40px;line-height:1.38;color:%(text)s;opacity:.9;text-wrap:pretty;max-width:900px}
 .meta{font-size:34px;font-weight:800;color:var(--tone);letter-spacing:.3px}
 .foot{position:absolute;left:72px;right:72px;bottom:66px;display:flex;justify-content:space-between;align-items:center;font-size:30px;color:%(muted)s}
 .cta{display:flex;align-items:center;gap:16px}.play{width:62px;height:62px;border-radius:50%%;background:%(accent)s;display:flex;align-items:center;justify-content:center}
@@ -507,15 +529,23 @@ def stripe_html(b):
     return "<div class='stripe'>" + "".join(f"<span style='background:{c}'></span>" for c in (b["red"], b["accent"], b["lime"], b["green"])) + "</div>"
 
 
-def page(body, w=CW, h=CH, extra_css="", pillar=None, motif=True, photo=""):
+def head_colors(seed=""):
+    """Headline in one bright logo colour, its last word in the other (orange and lime both read well on black)."""
     b = brand()
+    pair = [(b["lime"], b["accent"]), (b["accent"], b["lime"])]
+    return pair[int(hashlib.sha1(str(seed).encode()).hexdigest(), 16) % 2]
+
+
+def page(body, w=CW, h=CH, extra_css="", pillar=None, motif=True, photo="", seed=""):
+    b = brand()
+    headc, emc = head_colors(seed)
     if photo:
         motif = False
         body = f"<img class='ph' src='{esc(photo)}' alt=''><div class='phshade'></div>" + body
     t = tone(pillar) if pillar else b["accent"]
     css = BASE_CSS % {"w": w, "h": h, "dark": b["dark"], "accent": b["accent"], "green": b["green"], "text": b["text"], "muted": b["muted"], "display": DISPLAY, "body": BODY}
     bar = "<div class='bar'>" + "".join(f"<span style='background:{c}'></span>" for c in (b["red"], b["accent"], b["lime"], b["green"])) + "</div>"
-    return (f"<!doctype html><html><head><meta charset='utf-8'>{FONTS_LINK}<style>:root{{--tone:{t};--ink:{ink_on(t)}}}{css}{extra_css}</style></head>"
+    return (f"<!doctype html><html><head><meta charset='utf-8'>{FONTS_LINK}<style>:root{{--tone:{t};--ink:{ink_on(t)};--headc:{headc};--emc:{emc}}}{css}{extra_css}</style></head>"
             f"<body class='{'withphoto' if photo else ''}'><div class='bg'></div><div class='grain'></div>{motif_svg(b) if motif else ''}{body}{bar}{FIT_JS}</body></html>")
 
 
@@ -526,10 +556,10 @@ def top_html():
     return f"<div class='top'><div class='word'>{esc(b['name'])}</div></div>"
 
 
-def foot_html(left=None):
+def foot_html(left=None, label=None):
     b = brand()
-    icon = "<div class='play go'></div>" if left and ("link" in left.lower() or "follow" in left.lower()) else "<div class='play'></div>"
-    return f"<div class='foot'><div class='cta'>{icon}<div><b>{esc(left or 'Listen live')}</b>{esc(b['label'])}</div></div><div class='slogan'>{esc(b['slogan'])}</div></div>"
+    icon = "<div class='play go'></div>" if left and any(w in left.lower() for w in ("link", "follow", "story")) else "<div class='play'></div>"
+    return f"<div class='foot'><div class='cta'>{icon}<div><b>{esc(left or 'Listen live at')}</b>{esc(label or b['label'])}</div></div><div class='slogan'>{esc(b['slogan'])}</div></div>"
 
 
 def chip_html(text):
@@ -548,12 +578,26 @@ def head_html(text, size=None):
 PILLAR_CHIP = {"music": "Rare Breed Sounds", "program": "Real Talk", "community": "Around town", "behind": "Behind the mic", "cta": "Join the breed", "manual": "Resofrik FM", "reminder": "Tonight"}
 
 
+DEFAULT_PLACES = ["Oakwood Village", "Oakwood", "Bedford Heights", "Bedford", "Walton Hills", "Maple Heights", "Garfield Heights", "Richmond Heights",
+                  "Warrensville Heights", "Solon", "Valley View", "Independence", "Highland Hills", "North Randall", "Cleveland"]
+
+
+def news_place(post):
+    """The town a news item is about, for the card's label: the most specific name found."""
+    places = (SETTINGS.get("community") or {}).get("localPlaces") or DEFAULT_PLACES
+    text = f"{post.get('headline', '')} {post.get('short', '')} {post.get('place', '')} {post.get('source', '')}"
+    for p in sorted(places, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(p)}\b", text, re.I):
+            return p
+    return ""
+
+
 def card_html(post):
     b = brand()
     pillar = post.get("pillar") or "music"
     chip = PILLAR_CHIP.get(pillar, "Resofrik FM")
     if pillar == "community":
-        chip = f"Around {b['city']}"
+        chip = f"Around {news_place(post) or b['city']}"
     head = post.get("headline") or first_words(re.split(r"(?<=[.!?])\s", post.get("short", ""))[0], 12)
     sub = post.get("short", "")
     if sub.strip().startswith(head.strip()[:20]):
@@ -569,8 +613,8 @@ def card_html(post):
         meta = (meta + " · " if meta else "") + f"via {post['source']}"
     # our own photo behind the card; never for community news (it isn't our photo of that story)
     photo = "" if post.get("kind") == "community" else pick_photo(PILLAR_PHOTO_TAGS.get(pillar, ["station"]), post.get("id", head), post.get("headline", ""))
-    body = f"""{top_html()}<div class='main'>{chip_html(chip)}{head_html(head)}{stripe_html(b)}{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}{f"<div class='sub'>{esc(first_words(sub, 28 if photo else 40))}</div>" if sub else ""}</div>{foot_html('Details at the link' if post.get('kind') == 'community' else None)}"""
-    return page(body, pillar=pillar, photo=photo)
+    body = f"""{top_html()}<div class='main'>{chip_html(chip)}{head_html(head)}{stripe_html(b)}{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}{f"<div class='sub'>{esc(first_words(sub, 28 if photo else 40))}</div>" if sub else ""}</div>{foot_html('Full story at' if post.get('kind') == 'community' else None, label=b['label'] + '/links' if post.get('kind') == 'community' else None)}"""
+    return page(body, pillar=pillar, photo=photo, seed=post.get("id", head))
 
 
 def render_card(post, out_dir):
@@ -854,6 +898,23 @@ def slideshow_video(slides, out, music_url=""):
     return out
 
 
+def news_video(card_jpg, out, music_url, secs=12.0):
+    """One news card -> 12-second vertical video: slow push-in on the card over a blurred copy of itself, music bed faded in and out."""
+    tmp = Path(out).parent
+    frames = int(secs * 30)
+    silent = tmp / f"silent-{Path(out).stem}.mp4"
+    fc = (f"[0:v]split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=30:2,eq=brightness=-0.3[bg];"
+          f"[b]scale=2160:-2,zoompan=z='min(zoom+0.0004,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={CW}x{CH}:fps=30[fg];"
+          f"[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]")
+    ff("-loop", "1", "-t", f"{secs}", "-i", card_jpg, "-filter_complex", fc, "-map", "[v]", *X264, "-t", f"{secs}", silent)
+    bed = download(music_url, tmp / f"bed-{Path(out).stem}.audio")
+    dur = float(probe(bed).get("duration") or 0)
+    start = 30.0 if dur > secs + 45 else 0.0  # skip a slow intro when the song is long enough
+    ff("-i", silent, "-ss", f"{start}", "-i", bed, "-filter_complex", f"[1:a]atrim=0:{secs},asetpts=PTS-STARTPTS,afade=t=in:d=1,afade=t=out:st={secs - 2}:d=2,volume=0.8[m]",
+       "-map", "0:v", "-map", "[m]", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-shortest", "-movflags", "+faststart", out)
+    return out
+
+
 def artist_promo(a, out_dir):
     st = SETTINGS["station"]
     tmp = Path(out_dir)
@@ -1001,10 +1062,20 @@ def make():
     out_dir = WORK / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
     done = {"cards": 0, "showcards": 0, "carousels": 0, "promos": 0, "stories": 0, "jobs": 0}
+    music = [m for m in tasks.get("music") or [] if str(m.get("url", "")).startswith("https://")]
+    music_news = (SETTINGS.get("community") or {}).get("musicVideo", True) is not False
     for c in tasks.get("cards", [])[:45]:
         try:
-            url = upload(render_card(c, out_dir))
-            api("attach", {"postId": c["id"], "type": "image", "urls": [url]})
+            jpg = render_card(c, out_dir)
+            if c.get("kind") == "community" and music_news and music:
+                try:
+                    mp4 = news_video(jpg, out_dir / f"news-{c['id']}.mp4", random.choice(music)["url"])
+                    api("attach", {"postId": c["id"], "type": "video", "urls": [upload(mp4)]})
+                    done["cards"] += 1
+                    continue
+                except Exception as e:
+                    say("news video failed, posting the picture:", c.get("id"), e)
+            api("attach", {"postId": c["id"], "type": "image", "urls": [upload(jpg)]})
             done["cards"] += 1
         except Exception as e:
             say("card failed:", c.get("id"), e)
