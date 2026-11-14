@@ -5,8 +5,9 @@ workers_dev = true
 
 # Every 15 minutes: publish, reminders, now playing, inbox, community desk, weekly report.
 # Saturday 22:00 UTC: write next week's posts and ask the Studio for carousels.
+# Every minute: check whether the studio is streaming live (Cloudflare Stream) and post the teaser.
 [triggers]
-crons = ["*/15 * * * *", "0 22 * * 6"]
+crons = ["*/15 * * * *", "0 22 * * 6", "* * * * *"]
 
 [vars]
 PUBLIC_URL = "https://resofrik-autopilot.resofrikfm.workers.dev"
