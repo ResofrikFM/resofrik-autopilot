@@ -2173,7 +2173,7 @@ async function handlePublic(request, env, url) {
   }
   if (p === "/api/public/media") return json(await publicMedia(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p === "/api/public/stories") return json(await publicStories(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
-  if (p === "/backdrop.jpg") {
+  if (p === "/api/public/backdrop.jpg") {
     // the studio photo behind the news on the website's Community page (newest one in the Website news backdrop section)
     const bd = (await listPhotos(env)).filter((x) => x.tag === "backdrop").sort((a, b) => (a.key < b.key ? 1 : -1))[0];
     return bd ? new Response(null, { status: 302, headers: { location: bd.url, "cache-control": "public, max-age=3600", ...CORS } }) : new Response("not found", { status: 404, headers: CORS });
