@@ -308,7 +308,7 @@ def heuristic_item(it, src, settings):
     return {
         "score": min(score, 10),
         "summary": summ,
-        "short": f"{it['title']} (via {src['name']})"[:250],
+        "short": f"{it['title']} (via {it.get('_src') or src['name']})"[:250],
         "long": "",
         "kind": "event" if it.get("eventDate") else "news",
     }
