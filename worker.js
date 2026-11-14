@@ -1931,7 +1931,7 @@ async function listMusic(env, request) {
   } while (cursor);
   return out;
 }
-const PHOTO_TAGS = { station: "Station & studio", shows: "Shows & hosts", community: "Events & community", artists: "Artists", behind: "Behind the scenes", backdrop: "Card backdrop (the studio behind text posts)" };
+const PHOTO_TAGS = { station: "Station & studio", shows: "Shows & hosts", community: "Events & community", artists: "Artists", behind: "Behind the scenes", backdrop: "Website news backdrop (behind Community page news)" };
 async function listPhotos(env, prefix = "photos/") {
   if (!env.MEDIA || typeof env.MEDIA.list !== "function") return [];
   const out = [];
@@ -2173,6 +2173,11 @@ async function handlePublic(request, env, url) {
   }
   if (p === "/api/public/media") return json(await publicMedia(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p === "/api/public/stories") return json(await publicStories(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
+  if (p === "/backdrop.jpg") {
+    // the studio photo behind the news on the website's Community page (newest one in the Website news backdrop section)
+    const bd = (await listPhotos(env)).filter((x) => x.tag === "backdrop").sort((a, b) => (a.key < b.key ? 1 : -1))[0];
+    return bd ? new Response(null, { status: 302, headers: { location: bd.url, "cache-control": "public, max-age=3600", ...CORS } }) : new Response("not found", { status: 404, headers: CORS });
+  }
   if (p === "/api/public/photos") return json((await listPhotos(env)).filter((x) => x.tag === "station" || x.tag === "shows").map(({ url, tag, about }) => ({ url, tag, about })), 200, { ...CORS, "cache-control": "public, max-age=900" });
   if (p === "/api/public/originals") return json((await loadEpisodes(env)).filter((e) => e.video && !e.hidden).map(({ transcript, hidden, ...e }) => e), 200, { ...CORS, "cache-control": "public, max-age=300" });
   if (p === "/api/public/artists") return json(publicArtists(settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
@@ -2740,7 +2745,7 @@ ${alerts.map((a) => `<div class="alert">${a}</div>`).join("")}
 <form method="post" action="/action" enctype="multipart/form-data"><input type="hidden" name="anchor" value="music"><div class="grid2"><input type="file" name="file" accept="audio/*" multiple required><select name="genre">${["reggae", "soul", "african", "afrobeats", "hiphop", "jazz"].map((g) => `<option>${g}</option>`).join("")}</select></div><p><button name="do" value="music_upload">Add to music library</button></p></form></section>
 
 <section id="photos"><h2>Photo library (${photos.length} photo${photos.length === 1 ? "" : "s"})</h2>
-<p class="small">Your own photos make the posts. The Studio puts them behind the cards for each kind of post (Artists for music posts, Shows &amp; hosts for show reminders, Station &amp; studio for everything else) and into the weekly carousels. Posts with no photo of their own, including community news, get a dimmed Card backdrop instead (our studio, never someone else's photo). Only upload photos the station owns or has permission to use.</p>
+<p class="small">Your own photos make the posts. The Studio puts them behind the cards for each kind of post (Artists for music posts, Shows &amp; hosts for show reminders, Station &amp; studio for everything else) and into the weekly carousels. Community news posts keep the designed background, so nobody's photo appears next to a story it isn't from. The Website news backdrop is the studio photo shown, dimmed, behind the news on the website's Community page; upload a new one there to change it. Only upload photos the station owns or has permission to use.</p>
 ${pendingPhotos.length ? `<h3>Sent by artists, waiting for your OK (${pendingPhotos.length})</h3><div class="photos">${pendingPhotos.map((ph) => `<figure><a href="${esc(ph.url)}" target="_blank"><img src="${esc(ph.url)}" alt="" loading="lazy"></a><figcaption><b>${esc(ph.about)}</b>${ph.credit ? `<br>Photo: ${esc(ph.credit)}` : ""}<br><span class="small">${esc(ph.email)}${ph.instagram ? " · @" + esc(ph.instagram) : ""}</span></figcaption><form method="post" action="/action"><input type="hidden" name="anchor" value="photos"><input type="hidden" name="key" value="${esc(ph.key)}"><button name="do" value="photo_approve">Approve</button> <button class="ghost" name="do" value="photo_reject">Decline</button></form></figure>`).join("")}</div>` : ""}
 ${Object.entries(PHOTO_TAGS).map(([t, label]) => { const list = photos.filter((ph) => ph.tag === t); return `<details${list.length && list.length <= 12 ? " open" : ""}><summary>${esc(label)} (${list.length})</summary>${list.length ? `<div class="photos">${list.map((ph) => `<figure><a href="${esc(ph.url)}" target="_blank"><img src="${esc(ph.url)}" alt="${esc(ph.about)}" loading="lazy"></a>${ph.about || ph.credit ? `<figcaption>${esc(ph.about)}${ph.credit ? ` <span class="small">· ${esc(ph.credit)}</span>` : ""}</figcaption>` : ""}<form method="post" action="/action"><input type="hidden" name="anchor" value="photos"><input type="hidden" name="key" value="${esc(ph.key)}"><button class="ghost" name="do" value="photo_delete" onclick="return confirm('Remove this photo from the library?')">Remove</button></form></figure>`).join("")}</div>` : `<p class="small">None yet.</p>`}</details>`; }).join("")}
 <h3>Add photos</h3>
