@@ -1050,7 +1050,9 @@ function communityPost(settings, it, when, status) {
   const when2 = it.eventDate ? ` ${prettyDate(it.eventDate)}${it.place ? `, ${it.place}` : ""}.` : "";
   const credit = it.source ? ` (via ${it.source})` : "";
   const short = it.short || `${it.title}${when2 ? " —" + when2 : ""}${credit}`;
-  const long = it.long || `${it.title}${when2 ? "\n\n📍" + when2 : ""}\n\n${it.summary || ""}\n\n${it.source ? `More details from ${it.source} at the link.` : "More details at the link."}\n\n${st.hashtagsLocal.join(" ")}`;
+  const town = (settings.community.localPlaces || []).filter((p) => new RegExp(`\\b${escapeRe(p)}\\b`, "i").test(`${it.title} ${it.summary || ""} ${it.place || ""}`)).sort((a, b) => b.length - a.length)[0];
+  const tags = [...(town ? ["#" + town.replace(/[^A-Za-z]/g, "")] : []), ...st.hashtagsLocal].filter((t, i, a) => a.indexOf(t) === i).slice(0, 4);
+  const long = it.long || `${it.title}${when2 ? "\n\n📍" + when2 : ""}\n\n${it.summary || ""}\n\n${it.source ? `More details from ${it.source} at the link.` : "More details at the link."}\n\n${tags.join(" ")}`;
   return normalizePost({
     id: newId(),
     kind: "community",
@@ -1577,7 +1579,8 @@ function igCaption(settings, post) {
   const linkLine = post.kind === "community" || (post.linkExternal && post.source)
     ? `Full story${post.source ? ` from ${post.source}` : ""}: tap the link in our bio, then "In the news".`
     : `Listen live: tap the link in our bio (${settings.station.linkLabel}).`;
-  return fit((post.long || shortText(post)) + "\n\n" + linkLine, 2200);
+  const body = (post.long || shortText(post)).replace(/\n*More details[^\n]*at the link\.[ \t]*/g, ""); // Instagram captions can't hold a working link
+  return fit(body + "\n\n" + linkLine, 2200);
 }
 async function publishInstagram(env, settings, post) {
   const g = graph(env);
