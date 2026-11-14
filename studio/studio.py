@@ -628,7 +628,10 @@ def card_html(post):
     if post.get("source"):
         meta = (meta + " · " if meta else "") + f"via {post['source']}"
     # our own photo behind the card; never for community news (it isn't our photo of that story)
-    photo = "" if post.get("kind") == "community" else pick_photo(PILLAR_PHOTO_TAGS.get(pillar, ["station"]), post.get("id", head), post.get("headline", ""))
+    tags = PILLAR_PHOTO_TAGS.get(pillar, ["station"])
+    if any(p.get("tag") == "backdrop" for p in PHOTOS):
+        tags = [t for t in tags if t != "station"]  # the studio backdrop beats a generic station photo
+    photo = "" if post.get("kind") == "community" else pick_photo(tags, post.get("id", head), post.get("headline", ""))
     body = f"""{top_html()}<div class='main'>{chip_html(chip)}{head_html(head)}{stripe_html(b)}{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}{f"<div class='sub'>{esc(first_words(sub, 28 if photo else 40))}</div>" if sub else ""}</div>{foot_html('Full story at' if post.get('kind') == 'community' else None, label=b['label'] + '/links' if post.get('kind') == 'community' else None)}"""
     # no photo of our own for this post: the studio itself goes behind it (library tag "backdrop")
     backdrop = "" if photo else pick_photo(["backdrop"], post.get("id", head))
