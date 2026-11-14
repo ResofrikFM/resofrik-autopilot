@@ -1790,6 +1790,11 @@ async function handleStudio(request, env, url) {
       stories: settings.studio.stories && settings.studio.stories.enabled === false ? null : await storyPlan(env, settings, now),
       photos: (await listPhotos(env)).map(({ url, tag, about, credit }) => ({ url, tag, about, credit })),
       music: (await listMusic(env)).map(({ genre, url }) => ({ genre, url })),
+      // every story video gets a cover picture for the website (older ones are filled in once)
+      storyPosters: (await queryPosts(env, "WHERE kind = 'story' AND status IN ('published','partial','scheduled','approved') ORDER BY when_ms DESC LIMIT 60"))
+        .filter((p) => p.media && p.media.type === "video" && p.media.urls[0] && !(p.story && p.story.poster))
+        .slice(0, 12)
+        .map((p) => ({ postId: p.id, video: p.media.urls[0] })),
       transcribe: (await loadEpisodes(env)).filter((e) => e.video && !e.transcript).slice(0, 6).map((e) => ({ id: episodeId(e), video: e.video, poet: e.poet, title: e.title })),
       nowPlayingCards: settings.nowPlaying.enabled ? await (async () => { const cards = await kvJson(env, "np:cards", {}); return (await kvJson(env, "np:seen", [])).filter((x) => !cards[x.track]).slice(-12); })() : [],
     });
@@ -1838,6 +1843,13 @@ async function handleStudio(request, env, url) {
       await saveEpisodes(env, eps);
     }
     return json({ ok: !!e });
+  }
+  if (path === "story-poster") {
+    const post = await getPost(env, body.postId);
+    if (!post || post.kind !== "story" || !/^https:\/\//.test(body.url || "")) return json({ error: "bad request" }, 400);
+    post.story = { ...(post.story || {}), poster: body.url };
+    await savePost(env, post);
+    return json({ ok: true });
   }
   if (path === "npcard") {
     const cards = await kvJson(env, "np:cards", {});
@@ -2094,6 +2106,7 @@ async function publicStories(env, settings) {
       question: s.question || "",
       source: s.source || null,
       video: p.media && p.media.type === "video" ? p.media.urls[0] : "",
+      poster: /^https:\/\//.test(s.poster || "") ? s.poster : "",
       text: s.hook ? "" : String(p.long || p.short || ""),
       when: p.when,
       date: prettyDate(zoneParts(p.when, settings.station.timezone).date),
