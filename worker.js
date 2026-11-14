@@ -106,6 +106,7 @@ const DEFAULT_SETTINGS = {
   community: {
     enabled: true,
     musicVideo: true, // news posts go out as short videos with music from the music library
+    linkToSite: true, // post links open the story on resofrikfm.com/community, which links on to the publisher
     // the studio's neighbourhood: news that mentions these towns is scored higher than Cleveland-wide news
     localPlaces: ["Oakwood Village", "Oakwood", "Bedford", "Bedford Heights", "Walton Hills", "Maple Heights", "Garfield Heights", "Richmond Heights", "Warrensville Heights", "Solon", "Valley View", "Independence", "Highland Hills", "North Randall"],
     localBoost: 2,
@@ -1063,8 +1064,9 @@ function communityPost(settings, it, when, status) {
     headline: it.title.slice(0, 80),
     short: short.slice(0, 280),
     long,
-    link: it.url,
-    linkExternal: true,
+    link: settings.community.linkToSite === false ? it.url : `${st.website.replace(/\/$/, "")}/community/#n-${it.id}`,
+    linkExternal: settings.community.linkToSite === false,
+    sourceUrl: it.url,
     // never repost a source's own photo (their copyright): the Studio makes a branded card instead
     media: { type: "none", urls: [] },
     needsImage: true,
@@ -2072,18 +2074,34 @@ async function publicEvents(env, settings) {
   const items = (await getItems(env, "WHERE status IN ('new','scheduled','posted') AND created >= ? ORDER BY created DESC LIMIT 80", Date.now() - 21 * 86400000)).filter((i) => !i.eventDate || i.eventDate >= today);
   const events = items.filter((i) => i.eventDate).sort((a, b) => a.eventDate.localeCompare(b.eventDate));
   const news = items.filter((i) => !i.eventDate).sort((a, b) => b.score - a.score);
-  return [...events, ...news].slice(0, 15).map((i) => ({
+  return [...events, ...news].slice(0, 15).map((i) => publicNewsItem(i, settings));
+}
+function townOf(settings, text) {
+  return (settings.community.localPlaces || []).filter((p) => new RegExp(`\\b${escapeRe(p)}\\b`, "i").test(text)).sort((a, b) => b.length - a.length)[0] || "";
+}
+function cleanSummary(s) {
+  // our own words for the website reader: no "(via …)" tag, no hashtags, no "at the link" lines
+  return String(s || "").replace(/\s*\(via [^)]*\)\s*$/i, "").replace(/\n*More details[^\n]*at the link\.[ \t]*/gi, "").replace(/(\s*#[A-Za-z][\w]*)+\s*$/g, "").trim();
+}
+function publicNewsItem(i, settings) {
+  const tz = settings.station.timezone;
+  const summary = cleanSummary(i.summary || i.short || "");
+  const body = cleanSummary(i.long || "");
+  return {
+    id: i.id,
     title: i.title,
     date: i.eventDate ? prettyDate(i.eventDate) : prettyDate(zoneParts(i.published || Date.now(), tz).date),
     place: i.place || i.source || "",
     area: i.region === "Global" ? "Global" : "Northeast Ohio",
     where: i.region === "Global" ? "Global" : "Northeast Ohio",
-    description: i.summary || i.short || "",
-    desc: i.summary || i.short || "",
+    description: summary,
+    desc: summary,
+    body: body && body !== summary && !body.startsWith(i.title + "\n\n" + summary) ? body : "",
+    town: townOf(settings, `${i.title} ${i.summary || ""} ${i.place || ""}`),
     link: i.url,
     source: i.source,
     auto: true,
-  }));
+  };
 }
 
 async function publicMedia(env, settings) {
@@ -2148,6 +2166,11 @@ async function handlePublic(request, env, url) {
   if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
   const p = url.pathname;
   if (p === "/api/public/events") return json(await publicEvents(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
+  if (p.startsWith("/api/public/news/")) {
+    // one story for the website reader, even after it has dropped off the board
+    const it = (await getItems(env, "WHERE id = ? AND status != 'skipped'", p.split("/").pop()))[0];
+    return it ? json(publicNewsItem(it, settings), 200, { ...CORS, "cache-control": "public, max-age=600" }) : json({ error: "not found" }, 404, CORS);
+  }
   if (p === "/api/public/media") return json(await publicMedia(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p === "/api/public/stories") return json(await publicStories(env, settings), 200, { ...CORS, "cache-control": "public, max-age=600" });
   if (p === "/api/public/photos") return json((await listPhotos(env)).filter((x) => x.tag === "station" || x.tag === "shows").map(({ url, tag, about }) => ({ url, tag, about })), 200, { ...CORS, "cache-control": "public, max-age=900" });
