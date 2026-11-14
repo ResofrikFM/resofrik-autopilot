@@ -2161,6 +2161,83 @@ ${board.length ? `<section><h2>Around ${esc(st.city)}</h2>${board.slice(0, 5).ma
   );
 }
 
+// ---------------------------------------------------------------------------
+// Podcast submissions: podcasters apply on the website, the team reviews them in the panel
+// ---------------------------------------------------------------------------
+function durSec(s) {
+  s = String(s || "").trim();
+  if (/^\d+$/.test(s)) return +s;
+  const p = s.split(":").map(Number);
+  return p.some(isNaN) ? 0 : p.reduce((a, b) => a * 60 + b, 0);
+}
+async function podcastFeedCheck(url) {
+  // read the show's RSS feed so the team sees the facts at a glance: episodes, last release, typical length
+  try {
+    const r = await xfetch(url, { headers: { "user-agent": "ResofrikFM/1.0 (+https://resofrikfm.com)", accept: "application/rss+xml, application/xml, text/xml, */*" } });
+    if (!r.ok) return { ok: false, note: `The feed answered ${r.status}` };
+    const x = (await r.text()).slice(0, 3e6);
+    const pick = (re) => { const m = x.match(re); return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim() : ""; };
+    const episodes = x.split(/<item[\s>]/i).length - 1;
+    const lastMs = Date.parse(pick(/<item[\s>][\s\S]*?<pubDate>([\s\S]*?)<\/pubDate>/i));
+    const image = pick(/<itunes:image[^>]*href="([^"]+)"/i);
+    const durs = [...x.matchAll(/<itunes:duration>([^<]+)<\/itunes:duration>/gi)].slice(0, 12).map((m) => durSec(m[1])).filter(Boolean);
+    return {
+      ok: episodes > 0,
+      title: pick(/<title>([\s\S]*?)<\/title>/i).slice(0, 160),
+      episodes,
+      last: isNaN(lastMs) ? "" : new Date(lastMs).toISOString().slice(0, 10),
+      image: /^https:\/\//.test(image) ? image : "",
+      avgMin: durs.length ? Math.round(durs.reduce((a, b) => a + b, 0) / durs.length / 60) : 0,
+      explicit: /<itunes:explicit>\s*(yes|true|explicit)\s*</i.test(x),
+    };
+  } catch {
+    return { ok: false, note: "Couldn't read the feed" };
+  }
+}
+async function podcastSubmit(request, env) {
+  let f;
+  try {
+    f = await request.formData();
+  } catch {
+    return json({ ok: false, error: "Please fill in the form." }, 400, CORS);
+  }
+  const g = (k, n = 300) => String(f.get(k) || "").trim().slice(0, n);
+  if (g("website")) return json({ ok: true, message: "Thank you!" }, 200, CORS);
+  const url = (v) => (/^https?:\/\/\S+$/i.test(v) ? v : "");
+  const sub = {
+    id: newId(), created: Date.now(), status: "new",
+    show: g("show", 120), host: g("host", 120), email: g("email", 160), rss: url(g("rss", 500)), link: url(g("link", 500)),
+    category: g("category", 60), region: g("region", 80), length: g("length", 40), cadence: g("cadence", 40), music: g("music", 60), about: g("about", 1200),
+    consent: ["yes", "on", "true"].includes(g("consent", 10).toLowerCase()),
+  };
+  if (!sub.show || !sub.host || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(sub.email) || !(sub.rss || sub.link) || !sub.consent)
+    return json({ ok: false, error: "Please fill in the show name, your name, a valid email and your RSS feed (or a link to the show), and tick the permission box." }, 400, CORS);
+  const list = await kvJson(env, "podcast:subs", []);
+  const same = (x) => x.status !== "declined" && ((sub.rss && x.rss === sub.rss) || x.show.toLowerCase() === sub.show.toLowerCase());
+  if (list.some(same)) return json({ ok: true, message: "Thank you! We already have your show and will be in touch." }, 200, CORS);
+  if (sub.rss) sub.feed = await podcastFeedCheck(sub.rss);
+  list.unshift(sub);
+  await kvPut(env, "podcast:subs", JSON.stringify(list.slice(0, 400)));
+  await notify(env, `🎙 New podcast submission: ${sub.show} (${sub.host}). Review it in the control panel → Podcasts.`);
+  return json({ ok: true, message: "Thank you! We listen to every podcast and will email you within 14 days." }, 200, CORS);
+}
+function podcastCard(x) {
+  const fd = x.feed || {};
+  const pill = { new: "<span class='pill warn'>new</span>", contacted: "<span class='pill'>talking</span>", approved: "<span class='pill ok'>approved</span>", declined: "<span class='pill bad'>declined</span>" }[x.status] || "";
+  const facts = fd.ok
+    ? `${fd.episodes} episode${fd.episodes === 1 ? "" : "s"} · last ${esc(fd.last || "?")}${fd.avgMin ? ` · about ${fd.avgMin} min` : ""}${fd.explicit ? " · <b>marked explicit</b>" : ""}`
+    : x.rss ? `<span class="pill warn">${esc(fd.note || "feed not checked")}</span>` : "no RSS feed given";
+  const stale = fd.last && Date.now() - Date.parse(fd.last) > 120 * 86400000 ? ` <span class="pill warn">no new episode in 4+ months</span>` : "";
+  const opt = (v, l) => `<option value="${v}"${x.status === v ? " selected" : ""}>${l}</option>`;
+  return `<details class="post"><summary>${pill} <b>${esc(x.show)}</b> · ${esc(x.host)}${x.category ? ` · ${esc(x.category)}` : ""} <span class="small">(${new Date(x.created).toISOString().slice(0, 10)})</span></summary>
+<div style="display:flex;gap:14px;align-items:flex-start">${fd.image ? `<img src="${esc(fd.image)}" alt="" style="width:96px;height:96px;object-fit:cover;border-radius:8px">` : ""}<div>
+<p class="small">${facts}${stale}</p>
+<p class="small">${x.region ? `From: ${esc(x.region)} · ` : ""}${x.length ? `Length: ${esc(x.length)} · ` : ""}${x.cadence ? `New episodes: ${esc(x.cadence)} · ` : ""}Music: ${esc(x.music || "not said")}${/commercial/i.test(x.music || "") ? ` <span class="pill bad">plays commercial songs</span>` : ""}</p>
+<p class="small">${x.rss ? `<a href="${esc(x.rss)}" target="_blank" rel="noopener">RSS feed</a> · ` : ""}${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">Listen</a> · ` : ""}<a href="mailto:${esc(x.email)}">${esc(x.email)}</a></p>
+${x.about ? `<p>${esc(x.about)}</p>` : ""}</div></div>
+<form method="post" action="/action"><input type="hidden" name="anchor" value="podcasts"><input type="hidden" name="id" value="${esc(x.id)}"><div class="grid2"><select name="status">${opt("new", "New: not reviewed yet")}${opt("contacted", "Talking to them")}${opt("approved", "Approved for the schedule")}${opt("declined", "Not a fit")}</select><input name="note" value="${esc(x.note || "")}" placeholder="Team note (only you see this)"></div><p><button name="do" value="podcast_save">Save</button> <button class="ghost" name="do" value="podcast_delete" onclick="return confirm('Remove this submission?')">Remove</button></p></form></details>`;
+}
+
 async function handlePublic(request, env, url) {
   const settings = await loadSettings(env);
   if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
@@ -2195,6 +2272,7 @@ async function handlePublic(request, env, url) {
     const back = f.get("back");
     return redirect(back && /^https:\/\//.test(back) ? back : "/links?msg=" + encodeURIComponent("You're on the list. Welcome to the rare breed!"));
   }
+  if (p === "/api/public/podcast" && request.method === "POST") return podcastSubmit(request, env);
   if (p === "/api/public/announce" && request.method === "POST") {
     const f = await request.formData();
     const title = String(f.get("title") || f.get("org") || "").trim();
@@ -2410,6 +2488,21 @@ async function handleAction(request, env) {
       await env.MEDIA.put(key, f, { httpMetadata: { contentType: f.type || "audio/mpeg" } });
     }
     return back(`Added ${files.length} track${files.length === 1 ? "" : "s"} to ${genre}.`);
+  }
+  if (act === "podcast_save" || act === "podcast_delete") {
+    const id = String(form.get("id") || "");
+    const list = await kvJson(env, "podcast:subs", []);
+    const i = list.findIndex((x) => x.id === id);
+    if (i < 0) return back("That submission is gone already.");
+    if (act === "podcast_delete") list.splice(i, 1);
+    else {
+      const st = String(form.get("status") || "");
+      if (["new", "contacted", "approved", "declined"].includes(st)) list[i].status = st;
+      list[i].note = String(form.get("note") || "").trim().slice(0, 400);
+      list[i].updated = Date.now();
+    }
+    await kvPut(env, "podcast:subs", JSON.stringify(list));
+    return back(act === "podcast_delete" ? "Submission removed." : `Saved: ${list[i].show}.`);
   }
   if (act === "photo_upload") {
     if (!env.MEDIA) return back("Media storage (R2) isn't connected yet.");
@@ -2664,6 +2757,8 @@ async function dashboard(env, url, request) {
   const photos = await listPhotos(env);
   const pendingPhotos = await listPhotos(env, "photos-pending/");
   const episodes = await loadEpisodes(env);
+  const podcastSubs = await kvJson(env, "podcast:subs", []);
+  const podNew = podcastSubs.filter((x) => x.status === "new").length;
   const storyBank = await kvJson(env, "stories:left", null);
   const storiesUp = await queryPosts(env, "WHERE kind = 'story' AND when_ms >= ? AND status IN ('scheduled','approved','needs_review','processing') ORDER BY when_ms LIMIT 6", now);
 
@@ -2716,7 +2811,7 @@ ${p.status === "skipped" ? `<button class="ghost" name="do" value="restore">Put 
   const maxClicks = Math.max(1, ...stats.clicks.map((c) => c.n || 0));
   const body = `
 <header><b>${esc(settings.station.name)} Autopilot</b><span class="tag">${esc(settings.station.slogan)}</span><span class="pill ${settings.paused ? "bad" : "ok"}">${settings.paused ? "Paused" : "Running"}</span>
-<nav><a href="#queue">Queue</a><a href="#studio">Studio</a><a href="#photos">Photos</a><a href="#series">Series</a><a href="#community">Community</a><a href="#inbox">Inbox${inbox.length ? ` (${inbox.length})` : ""}</a><a href="#results">Results</a><a href="#conn">Connections</a><a href="#settings">Settings</a><a href="/links" target="_blank">Link page ↗</a><a href="/logout">Sign out</a></nav></header>
+<nav><a href="#queue">Queue</a><a href="#studio">Studio</a><a href="#photos">Photos</a><a href="#podcasts">Podcasts${podNew ? ` (${podNew})` : ""}</a><a href="#series">Series</a><a href="#community">Community</a><a href="#inbox">Inbox${inbox.length ? ` (${inbox.length})` : ""}</a><a href="#results">Results</a><a href="#conn">Connections</a><a href="#settings">Settings</a><a href="/links" target="_blank">Link page ↗</a><a href="/logout">Sign out</a></nav></header>
 <main>${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
 <section><h2>At a glance</h2><div class="grid3">
 <div class="stat"><b>${upcoming.filter((p) => p.status !== "skipped").length}</b>posts queued</div><div class="stat"><b>${stats.published}</b>posted this week</div><div class="stat"><b>${stats.totalClicks}</b>link clicks this week</div>
@@ -2751,6 +2846,11 @@ ${Object.entries(PHOTO_TAGS).map(([t, label]) => { const list = photos.filter((p
 <h3>Add photos</h3>
 <form method="post" action="/action" enctype="multipart/form-data"><input type="hidden" name="anchor" value="photos"><input type="file" name="file" accept="image/jpeg,image/png,image/webp" multiple required><div class="grid3"><select name="tag">${Object.entries(PHOTO_TAGS).map(([t, label]) => `<option value="${t}">${esc(label)}</option>`).join("")}</select><input name="about" placeholder="Who or what is in them (e.g. a show or artist name)"><input name="credit" placeholder="Photo credit (optional)"></div><p class="small">Up to 60 photos at a time, 25 MB each. Tip: name the show or artist in “Who or what” so the Studio can match photos to the right show reminder or artist post.</p><p><button name="do" value="photo_upload">Add to photo library</button></p></form>
 <p class="small">Artists can send their own photos here: <a href="/send-photos" target="_blank">${esc(origin(env, request))}/send-photos</a> (share this link with them). You approve each one first.</p></section>
+
+<section id="podcasts"><h2>Podcasts for the schedule (${podcastSubs.length}${podNew ? `, ${podNew} new` : ""})</h2>
+<p class="small">Podcasters apply at <a href="${esc(settings.station.website)}/submit/#podcast" target="_blank">${esc(settings.station.website.replace(/^https?:\/\//, ""))}/submit/#podcast</a>. Share that link in your outreach. The panel reads each show's feed for you. Before approving, check: fits the mission, sounds good, publishes reliably (8 to 10+ episodes, still releasing), fits a 30 or 60 minute slot, no commercial songs played, credible host. Approving here doesn't air anything by itself: add approved shows to the schedule in AzuraCast, then to <b>schedule</b> in Settings.</p>
+${["new", "contacted", "approved", "declined"].map((st) => { const l = podcastSubs.filter((x) => x.status === st); return l.length ? `<h3>${{ new: "New", contacted: "Talking to them", approved: "Approved", declined: "Not a fit" }[st]} (${l.length})</h3>${l.map(podcastCard).join("")}` : ""; }).join("") || `<p class="small">No submissions yet.</p>`}
+</section>
 
 <section id="series"><h2>Original series: episodes (${episodes.length})</h2>
 <p class="small">Episodes uploaded here play on the website's series pages (from our own storage, no YouTube needed). Name each file like <code>cpbw-s1-e01--Poet--Title.mp4</code>, with a matching <code>.jpg</code> for its picture (cpbw = Cleveland Poetry in Black and White, cmbw = Cleveland Music in Black and White). The Studio listens to each new episode and writes down the words, so a description can be written from them.</p>
