@@ -71,7 +71,7 @@ def api(path, body=None, method=None):
 
 def upload(path, ctype=None):
     path = Path(path)
-    ctype = ctype or {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "mp4": "video/mp4"}.get(path.suffix[1:].lower(), "application/octet-stream")
+    ctype = ctype or {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "mp4": "video/mp4", "txt": "text/plain; charset=utf-8", "srt": "application/x-subrip; charset=utf-8", "vtt": "text/vtt; charset=utf-8", "json": "application/json"}.get(path.suffix[1:].lower(), "application/octet-stream")
     q = urllib.parse.urlencode({"name": path.name, "type": ctype})
     raw, _ = http(f"{API}/api/studio/upload?{q}", data=path.read_bytes(), headers={"authorization": f"Bearer {TOKEN}", "content-type": ctype}, method="POST", timeout=600)
     return json.loads(raw)["url"]
@@ -330,6 +330,7 @@ def ai_enrich(items, settings):
         '{"i": number, "keep": true|false, "score": 0-10 (how much our listeners would care), "kind": "event"|"news", '
         '"eventDate": "YYYY-MM-DD" only if the text states the date else "", "place": "short place name or empty", '
         '"region": "Northeast Ohio"|"Global", "summary": "max 40 words, own words", '
+        '"hook": "max 9 words: the specific human reason a neighbour would stop scrolling, built on a real detail from the text (a name, a place, a number); no clickbait, no emojis, no question", '
         f'"short": "max 220 characters, friendly, ends with (via SOURCE)", "long": "60-100 words for Facebook/Instagram, ends with 2-3 hashtags, credit the source"}}.\n'
         + json.dumps(payload, ensure_ascii=False)
     )
@@ -395,7 +396,7 @@ def scout():
             "url": it["url"], "title": it["title"][:200], "source": it["_src"], "feed": src["name"], "region": h.get("region") or src.get("region", "Northeast Ohio"),
             "summary": h.get("summary") or first_words(it.get("summary", ""), 32), "short": h.get("short", ""), "long": h.get("long", ""),
             "kind": h.get("kind") or ("event" if it.get("eventDate") else "news"), "eventDate": h.get("eventDate") or it.get("eventDate", ""),
-            "place": h.get("place") or it.get("place", ""), "score": h.get("score", 5), "image": it.get("image", "") if (it.get("image", "") or "").startswith("https://") else "",
+            "place": h.get("place") or it.get("place", ""), "hook": h.get("hook", ""), "score": h.get("score", 5), "image": it.get("image", "") if (it.get("image", "") or "").startswith("https://") else "",
             "published": int(it["published"].timestamp() * 1000) if it.get("published") else None,
         })
     added = api("items", {"items": out}).get("added", 0) if out else 0
@@ -915,6 +916,102 @@ def news_video(card_jpg, out, music_url, secs=12.0):
     return out
 
 
+SEND_PROMPT = "Who needs to see this?"
+SEND_LINE = "Send it to a neighbour who'd want to know."
+
+
+def news_meta(post):
+    meta = ""
+    if post.get("eventDate"):
+        try:
+            d = dt.date.fromisoformat(post["eventDate"])
+            meta = f"{d.strftime('%a, %b')} {d.day}"
+        except ValueError:
+            pass
+    if post.get("place"):
+        meta = (meta + " · " if meta else "") + post["place"]
+    return meta
+
+
+def news_hook(post):
+    hook = (post.get("hook") or "").strip().rstrip(".")
+    if not hook or len(hook.split()) > 12:
+        hook = first_words(post.get("headline", ""), 10).rstrip(".")
+    return hook
+
+
+def news_carousel(post, out_dir):
+    """Community news as 3 swipeable 4:5 pictures: the hook, what to know, then a send-it-on prompt."""
+    b = brand()
+    town = news_place(post) or b["city"]
+    hook = news_hook(post)
+    meta = news_meta(post)
+    cover = page(f"""{top_html()}<div class='main'>{chip_html('Around ' + town)}{head_html(hook, 104)}{stripe_html(b)}<div class='meta'>Swipe &rarr;</div></div>{foot_html()}""", pillar="community", seed=post.get("id", hook))
+    summary = post.get("summary") or re.sub(r"\s*\(via [^)]*\)\s*$", "", post.get("short", ""))
+    credit = f"via {post['source']}" if post.get("source") else ""
+    know = page(f"""{top_html()}<div class='main' style='gap:26px'><div class='kick' style='font-size:34px;letter-spacing:3px;text-transform:uppercase;color:var(--tone)'>What to know</div><div class='head' style='font-size:66px'>{esc(post.get('headline', ''))}</div>{stripe_html(b)}{f"<div class='meta'>{esc(meta)}</div>" if meta else ""}<div class='sub'>{esc(first_words(summary, 42))}</div>{f"<div class='meta' style='font-size:28px;opacity:.75'>{esc(credit)}</div>" if credit else ""}</div>{foot_html('Full story at', b['label'] + '/links')}""", pillar="community", seed=post.get("id", hook) + "2")
+    end = page(f"""{top_html()}<div class='main' style='align-items:flex-start'>{head_html(SEND_PROMPT, 120)}{stripe_html(b)}<div class='sub'>{esc(SEND_LINE)}</div><div><span class='chip' style='font-size:32px;padding:18px 32px;letter-spacing:1px;text-transform:none'>Full story: {esc(b['label'])}/links</span></div></div>{foot_html('Follow for more')}""", pillar="cta")
+    return render_slides([cover, know, end], out_dir, f"news-{post['id']}")
+
+
+REEL_CSS = """
+.k .head{font-size:112px;line-height:1.02}
+.k .w{display:inline-block;margin-right:.22em}
+.k .w.off{opacity:0}
+.k .w.new{color:var(--tone)}
+.k .main{justify-content:center}
+"""
+
+
+def reel_frame(inner, pillar="community", seed=""):
+    html_doc = page(f"{top_html()}<div class='main'>{inner}</div>{foot_html('Full story at', brand()['label'] + '/links')}", W, H, REEL_CSS, pillar=pillar, seed=seed)
+    return html_doc.replace("<body class=''>", "<body class='k'>", 1)
+
+
+def news_reel(post, out_dir, music_url, secs=8.4):
+    """Community news as an 8-second vertical reel: the hook types on word by word from the first frame,
+    one line of facts, then a send-it-on question. No static opening card."""
+    out_dir = Path(out_dir)
+    b = brand()
+    town = news_place(post) or b["city"]
+    words = news_hook(post).split()
+    meta = news_meta(post)
+    chip = chip_html("Around " + town)
+    shots = []  # (html, seconds)
+    step = 0.16
+    for k in range(1, len(words) + 1):  # word k appears; frame 0 already shows the first word
+        spans = "".join(f"<span class='w{' new' if i == k - 1 else ''}{' off' if i >= k else ''}'>{esc(w)}</span>" for i, w in enumerate(words))
+        shots.append((reel_frame(f"{chip}<div class='head'>{spans}</div>", seed=post.get("id", "")), step))
+    hold = max(1.4, 3.6 - step * len(words))
+    full = "".join(f"<span class='w'>{esc(w)}</span>" for w in words)
+    shots.append((reel_frame(f"{chip}<div class='head'>{full}</div>{stripe_html(b)}", seed=post.get("id", "")), hold))
+    fact = esc(first_words(post.get("headline", ""), 14))
+    shots.append((reel_frame(f"<div class='head' style='font-size:76px'>{fact}</div>{stripe_html(b)}{f'<div class=meta>{esc(meta)}</div>' if meta else ''}", seed=post.get("id", "")), 2.4))
+    shots.append((reel_frame(f"{head_html(SEND_PROMPT, 120)}{stripe_html(b)}<div class='sub'>{esc(SEND_LINE)}</div>", pillar="cta"), 2.2))
+    segs, total = [], 0.0
+    for i, (html_doc, d) in enumerate(shots):
+        png = out_dir / f"reel-{post['id']}-{i}.png"
+        chrome_shot(html_doc, W, H, str(png))
+        seg = out_dir / f"reel-{post['id']}-{i}.mp4"
+        z = "min(zoom+0.0008,1.04)" if i >= len(words) - 1 else "1"
+        nfr = max(1, round(d * 30))
+        fc = f"[0:v]scale=1350:-2,zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={nfr}:s={W}x{H}:fps=30,format=yuv420p[v]"
+        ff("-loop", "1", "-t", f"{d}", "-i", png, "-filter_complex", fc, "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-r", "30", "-frames:v", str(nfr), seg)
+        segs.append(seg)
+        total += nfr / 30
+    lst = out_dir / f"reel-{post['id']}.txt"
+    lst.write_text("".join(f"file '{s.resolve()}'\n" for s in segs))
+    silent = out_dir / f"reel-{post['id']}-v.mp4"
+    ff("-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", silent)
+    out = out_dir / f"news-{post['id']}.mp4"
+    bed = download(music_url, out_dir / f"bed-reel-{post['id']}.audio")
+    dur = float(probe(bed).get("duration") or 0)
+    start = 30.0 if dur > total + 45 else 0.0
+    ff("-i", silent, "-ss", f"{start}", "-i", bed, "-filter_complex", f"[1:a]atrim=0:{total:.2f},asetpts=PTS-STARTPTS,afade=t=in:d=0.3,afade=t=out:st={total - 1.2:.2f}:d=1.2,volume=0.8[m]",
+       "-map", "0:v", "-map", "[m]", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-shortest", "-movflags", "+faststart", out)
+    return out
+
+
 def artist_promo(a, out_dir):
     st = SETTINGS["station"]
     tmp = Path(out_dir)
@@ -1017,6 +1114,59 @@ def fetch_media(url, dest_dir):
     return download(url, dest_dir / f"source.{ext.group(1).lower() if ext else 'bin'}")
 
 
+def srt_time(t):
+    ms = int(round(t * 1000))
+    return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+
+
+def caption_cues(words, max_chars=42, max_secs=4.5):
+    """Words -> short caption cues that break at punctuation where possible."""
+    cues, cur = [], []
+    for w in words:
+        cur.append(w)
+        text = "".join(x["word"] for x in cur).strip()
+        if len(text) >= max_chars or cur[-1]["end"] - cur[0]["start"] >= max_secs or (len(text) > 18 and re.search(r"[.?!,;:]$", w["word"].strip())):
+            cues.append({"start": cur[0]["start"], "end": cur[-1]["end"], "text": text})
+            cur = []
+    if cur:
+        cues.append({"start": cur[0]["start"], "end": cur[-1]["end"], "text": "".join(x["word"] for x in cur).strip()})
+    return cues
+
+
+def process_transcript_job(job, out_dir):
+    """Transcript only: no clips, no posts. Returns links to a readable transcript, captions and word timings."""
+    jd = Path(out_dir) / f"job-{job['id']}"
+    jd.mkdir(parents=True, exist_ok=True)
+    src = fetch_media(job["url"], jd)
+    if not probe(src)["audio"]:
+        raise RuntimeError("the file has no sound to work with")
+    audio = jd / "audio.wav"
+    ff("-i", src, "-vn", "-ac", "1", "-ar", "16000", "-t", str(int(os.environ.get("MAX_TRANSCRIPT_MINUTES", "180")) * 60), audio)
+    segments, words = transcribe(audio)
+    if not segments:
+        raise RuntimeError("no speech found")
+    name = slugify(job.get("title") or "recording")[:60] or "recording"
+    lines, para, last = [], [], None
+    for sg in segments:  # paragraphs at pauses longer than 1.5 s, each with its start time
+        if para and sg["start"] - last > 1.5:
+            lines.append(para)
+            para = []
+        para.append(sg)
+        last = sg["end"]
+    if para:
+        lines.append(para)
+    mmss = lambda t: f"{int(t) // 3600}:{int(t) // 60 % 60:02d}:{int(t) % 60:02d}"
+    txt = jd / f"{name}-transcript.txt"
+    txt.write_text((job.get("title") or "Transcript") + "\n\n" + "\n\n".join(f"[{mmss(p[0]['start'])}] " + " ".join(x["text"] for x in p) for p in lines) + "\n", encoding="utf-8")
+    srt = jd / f"{name}-captions.srt"
+    srt.write_text("\n".join(f"{i}\n{srt_time(c['start'])} --> {srt_time(c['end'])}\n{c['text']}\n" for i, c in enumerate(caption_cues(words), 1)), encoding="utf-8")
+    js = jd / f"{name}-words.json"
+    js.write_text(json.dumps({"segments": segments, "words": words}, ensure_ascii=False), encoding="utf-8")
+    links = {"txt": upload(txt), "srt": upload(srt), "json": upload(js)}
+    mins = round(segments[-1]["end"] / 60)
+    return {"summary": f"Transcript of “{job.get('title') or 'recording'}” ready ({mins} min, {len(words)} words)", "files": links}
+
+
 def process_clip_job(job, out_dir):
     st = SETTINGS["station"]
     studio = SETTINGS.get("studio", {})
@@ -1063,18 +1213,26 @@ def make():
     out_dir.mkdir(parents=True, exist_ok=True)
     done = {"cards": 0, "showcards": 0, "carousels": 0, "promos": 0, "stories": 0, "jobs": 0}
     music = [m for m in tasks.get("music") or [] if str(m.get("url", "")).startswith("https://")]
-    music_news = (SETTINGS.get("community") or {}).get("musicVideo", True) is not False
+    news_format = str((SETTINGS.get("community") or {}).get("format") or "carousel").lower()  # carousel | image | reel
     for c in tasks.get("cards", [])[:45]:
         try:
-            jpg = render_card(c, out_dir)
-            if c.get("kind") == "community" and music_news and music:
+            if c.get("kind") == "community" and news_format == "reel" and music:
                 try:
-                    mp4 = news_video(jpg, out_dir / f"news-{c['id']}.mp4", random.choice(music)["url"])
+                    mp4 = news_reel(c, out_dir, random.choice(music)["url"])
                     api("attach", {"postId": c["id"], "type": "video", "urls": [upload(mp4)]})
                     done["cards"] += 1
                     continue
                 except Exception as e:
-                    say("news video failed, posting the picture:", c.get("id"), e)
+                    say("news reel failed, making a carousel:", c.get("id"), e)
+            if c.get("kind") == "community" and news_format != "image":
+                try:
+                    files = news_carousel(c, out_dir)
+                    api("attach", {"postId": c["id"], "type": "images", "urls": [upload(f) for f in files]})
+                    done["cards"] += 1
+                    continue
+                except Exception as e:
+                    say("news carousel failed, posting one picture:", c.get("id"), e)
+            jpg = render_card(c, out_dir)
             api("attach", {"postId": c["id"], "type": "image", "urls": [upload(jpg)]})
             done["cards"] += 1
         except Exception as e:
@@ -1133,8 +1291,12 @@ def make():
             say("artist promo failed:", a.get("name"), e)
     for job in tasks.get("jobs", [])[:MAX_JOBS]:
         try:
-            summary = process_clip_job(job, out_dir)
-            api("job-done", {"id": job["id"], "ok": True, "summary": summary})
+            if job.get("type") == "transcript":
+                r = process_transcript_job(job, out_dir)
+                api("job-done", {"id": job["id"], "ok": True, "summary": r["summary"], "result": r})
+            else:
+                summary = process_clip_job(job, out_dir)
+                api("job-done", {"id": job["id"], "ok": True, "summary": summary})
             done["jobs"] += 1
         except Exception as e:
             say("job failed:", job.get("url"), e)
