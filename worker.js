@@ -105,7 +105,8 @@ const DEFAULT_SETTINGS = {
   },
   community: {
     enabled: true,
-    musicVideo: true, // news posts go out as short videos with music from the music library
+    format: "carousel", // how news posts look: "carousel" (3 swipeable pictures: hook, what to know, send it on), "image" (one picture) or "reel" (8-second video, hook types on from the first frame)
+    sendPrompt: "Who needs to see this? Send it to them.", // last line before the hashtags on Facebook/Instagram news posts
     linkToSite: true, // post links open the story on resofrikfm.com/community, which links on to the publisher
     // the studio's neighbourhood: news that mentions these towns is scored higher than Cleveland-wide news
     localPlaces: ["Oakwood Village", "Oakwood", "Bedford", "Bedford Heights", "Walton Hills", "Maple Heights", "Garfield Heights", "Richmond Heights", "Warrensville Heights", "Solon", "Valley View", "Independence", "Highland Hills", "North Randall"],
@@ -983,6 +984,7 @@ async function ingestItems(env, settings, items) {
       kind: it.kind === "event" ? "event" : "news",
       eventDate: isValidDate(it.eventDate) ? it.eventDate : "",
       place: String(it.place || "").slice(0, 120),
+      hook: String(it.hook || "").slice(0, 90),
       short: String(it.short || "").slice(0, 260),
       long: String(it.long || "").slice(0, 1200),
       image: /^https:\/\//.test(it.image || "") ? it.image : "",
@@ -1046,6 +1048,8 @@ async function scheduleCommunity(env, settings, now) {
   return made;
 }
 
+const MODE_SELECT = `<p><select name="mode"><option value="clip">Make shorts and schedule them</option><option value="transcript">Transcript only (no posts)</option></select></p>`;
+
 function communityPost(settings, it, when, status) {
   const st = settings.station;
   const when2 = it.eventDate ? ` ${prettyDate(it.eventDate)}${it.place ? `, ${it.place}` : ""}.` : "";
@@ -1053,7 +1057,13 @@ function communityPost(settings, it, when, status) {
   const short = it.short || `${it.title}${when2 ? " —" + when2 : ""}${credit}`;
   const town = (settings.community.localPlaces || []).filter((p) => new RegExp(`\\b${escapeRe(p)}\\b`, "i").test(`${it.title} ${it.summary || ""} ${it.place || ""}`)).sort((a, b) => b.length - a.length)[0];
   const tags = [...(town ? ["#" + town.replace(/[^A-Za-z]/g, "")] : []), ...st.hashtagsLocal].filter((t, i, a) => a.indexOf(t) === i).slice(0, 4);
-  const long = it.long || `${it.title}${when2 ? "\n\n📍" + when2 : ""}\n\n${it.summary || ""}\n\n${it.source ? `More details from ${it.source} at the link.` : "More details at the link."}\n\n${tags.join(" ")}`;
+  let long = it.long || `${it.title}${when2 ? "\n\n📍" + when2 : ""}\n\n${it.summary || ""}\n\n${it.source ? `More details from ${it.source} at the link.` : "More details at the link."}\n\n${tags.join(" ")}`;
+  const ask = settings.community.sendPrompt;
+  if (ask && !long.includes(ask)) {
+    // the send-it-on question goes just above the hashtags (sends are what spread local posts)
+    const m = long.match(/\n*((?:#[\w]+\s*)+)$/);
+    long = m ? `${long.slice(0, m.index).trimEnd()}\n\n${ask}\n\n${m[1].trim()}` : `${long.trimEnd()}\n\n${ask}`;
+  }
   return normalizePost({
     id: newId(),
     kind: "community",
@@ -1076,6 +1086,8 @@ function communityPost(settings, it, when, status) {
     source: it.source,
     eventDate: it.eventDate,
     place: it.place,
+    summary: it.summary || "",
+    hook: it.hook || "",
   });
 }
 
@@ -1783,7 +1795,7 @@ async function handleStudio(request, env, url) {
       now,
       publicUrl: origin(env, request),
       settings: { station: settings.station, studio: settings.studio, pillars: settings.pillars, artists: settings.artists, schedule: activeShows(settings), sources: settings.sources, community: settings.community, ai: settings.ai },
-      cards: cards.map((p) => ({ id: p.id, kind: p.kind, pillar: p.pillar, headline: p.headline, short: p.short, source: p.source || "", eventDate: p.eventDate || "", place: p.place || "", when: p.when })),
+      cards: cards.map((p) => ({ id: p.id, kind: p.kind, pillar: p.pillar, headline: p.headline, short: p.short, source: p.source || "", eventDate: p.eventDate || "", place: p.place || "", summary: p.summary || "", hook: p.hook || "", when: p.when })),
       jobs,
       weekly: weeklyReq && !weeklyDone ? { monday, weekStart, board: boardItems.slice(0, 6) } : null,
       showCardsNeeded: activeShows(settings).filter((s) => !showcards[slug(s.show)]).map((s) => ({ show: s.show, slug: slug(s.show), day: s.day, start: s.start, description: s.description })),
@@ -2591,8 +2603,10 @@ async function handleAction(request, env) {
     }
     if (!/^https?:\/\//.test(src)) return back("Paste a link to a video or audio file (or a YouTube link).");
     const id = await hashId(src + Date.now());
-    await env.DB.prepare("INSERT INTO jobs (id, created, status, type, data) VALUES (?, ?, 'queued', 'clip', ?)").bind(id, Date.now(), JSON.stringify({ url: src, title: String(form.get("title") || ""), count: Math.min(8, Math.max(1, Number(form.get("count")) || settings.studio.clipsPerVideo)) })).run();
+    const transcriptOnly = form.get("mode") === "transcript";
+    await env.DB.prepare("INSERT INTO jobs (id, created, status, type, data) VALUES (?, ?, 'queued', ?, ?)").bind(id, Date.now(), transcriptOnly ? "transcript" : "clip", JSON.stringify({ url: src, title: String(form.get("title") || ""), count: Math.min(8, Math.max(1, Number(form.get("count")) || settings.studio.clipsPerVideo)) })).run();
     const started = await dispatchStudio(env);
+    if (transcriptOnly) return back(`Got it. The Studio will write the transcript ${started ? "now" : "on its next run"}. Nothing will be posted. The files appear under Studio jobs when it's done.`);
     return back(`Got it. The Studio will cut shorts from it ${started ? "now" : "on its next run"} and schedule them.`);
   }
   if (act === "item_post" || act === "item_skip" || act === "item_approve") {
@@ -2826,9 +2840,10 @@ ${alerts.map((a) => `<div class="alert">${a}</div>`).join("")}
 
 <section id="studio"><h2>Studio — shorts, videos, carousels</h2>
 <p class="small">Give the Studio a show recording, podcast episode or video. It finds the best moments, cuts vertical captioned shorts in the station's look, writes captions, and schedules them (${esc(settings.studio.clipTimes.join(" and "))} each day). It also makes picture cards for every post, weekly carousels, artist promo videos and a weekly “around Cleveland” video.</p>
-<div class="grid2"><form method="post" action="/action"><input type="hidden" name="anchor" value="studio"><h3>From a link</h3><input type="url" name="url" placeholder="https://… (mp4, mp3, podcast episode, YouTube)" required><div class="grid2"><input name="title" placeholder="Title (optional)"><input type="number" name="count" min="1" max="8" value="${settings.studio.clipsPerVideo}" title="How many shorts"></div><p><button name="do" value="clip_url">Make shorts</button></p></form>
-<form method="post" action="/action" enctype="multipart/form-data"><input type="hidden" name="anchor" value="studio"><h3>Upload a file (up to 100 MB)</h3><input type="file" name="file" accept="video/*,audio/*"><div class="grid2"><input name="title" placeholder="Title (optional)"><input type="number" name="count" min="1" max="8" value="${settings.studio.clipsPerVideo}"></div><p><button name="do" value="clip_upload">Upload and make shorts</button></p></form></div>
-<h3>Studio jobs</h3><table>${jobs.map((j) => { const d = JSON.parse(j.data); return `<tr><td class="small">${esc(fmtLocal(j.created, tz))}</td><td>${esc(d.title || d.url)}</td><td><span class="pill ${j.status === "done" ? "ok" : j.status === "failed" ? "bad" : "warn"}">${esc(j.status)}</span></td></tr>`; }).join("") || `<tr><td class="small">No jobs yet.</td></tr>`}</table>
+<div class="grid2"><form method="post" action="/action"><input type="hidden" name="anchor" value="studio"><h3>From a link</h3><input type="url" name="url" placeholder="https://… (mp4, mp3, podcast episode, YouTube)" required><div class="grid2"><input name="title" placeholder="Title (optional)"><input type="number" name="count" min="1" max="8" value="${settings.studio.clipsPerVideo}" title="How many shorts"></div>${MODE_SELECT}<p><button name="do" value="clip_url">Start</button></p></form>
+<form method="post" action="/action" enctype="multipart/form-data"><input type="hidden" name="anchor" value="studio"><h3>Upload a file (up to 100 MB)</h3><input type="file" name="file" accept="video/*,audio/*"><div class="grid2"><input name="title" placeholder="Title (optional)"><input type="number" name="count" min="1" max="8" value="${settings.studio.clipsPerVideo}"></div>${MODE_SELECT}<p><button name="do" value="clip_upload">Upload and start</button></p></form></div>
+<p class="small"><b>Transcript only</b> writes down every word with times (a readable .txt, .srt captions and word timings for editing) and posts nothing. For long recordings, give it the audio (.m4a or .mp3) or a YouTube link; uploads are limited to 100 MB.</p>
+<h3>Studio jobs</h3><table>${jobs.map((j) => { const d = JSON.parse(j.data); let r = {}; try { r = JSON.parse(d.result || "{}") || {}; } catch {} const f = r.files || {}; return `<tr><td class="small">${esc(fmtLocal(j.created, tz))}</td><td>${esc(d.title || d.url)}${j.type === "transcript" ? ` <span class="pill">transcript</span>` : ""}${f.txt ? `<div class="small"><a href="${esc(f.txt)}" target="_blank">Transcript (.txt)</a> · <a href="${esc(f.srt)}" download>Captions (.srt)</a> · <a href="${esc(f.json)}" download>Word timings (.json)</a></div>` : ""}</td><td><span class="pill ${j.status === "done" ? "ok" : j.status === "failed" ? "bad" : "warn"}">${esc(j.status)}</span></td></tr>`; }).join("") || `<tr><td class="small">No jobs yet.</td></tr>`}</table>
 <h3>Videos ready for TikTok and YouTube</h3><p class="small">TikTok and YouTube keep automated uploads private until an app passes their review, so download these and post them by hand (or through Content360).</p>
 <table>${readyVideos.filter((p) => p.media.type === "video").map((p) => `<tr><td>${esc(p.headline || shortText(p).slice(0, 70))}</td><td><a href="${esc(p.media.urls[0])}" download>Download</a></td></tr>`).join("") || `<tr><td class="small">None yet.</td></tr>`}</table></section>
 <section id="music"><h2>Rare Breed Stories &amp; Music library</h2>
