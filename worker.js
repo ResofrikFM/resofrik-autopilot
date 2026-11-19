@@ -622,6 +622,68 @@ async function liveCheck(env, settings, now) {
   await kvPut(env, "live:state", JSON.stringify(state));
   return 1;
 }
+// ---------------------------------------------------------------------------
+// Live video on YouTube: the full episodes go out as scheduled "live" streams
+// (pre-recorded, from OnlySocial) to YouTube and Facebook. While no Cloudflare
+// Stream input is set up, the site's Live page plays the YouTube live and keeps
+// the last one as the replay. We read the channel's public /live page (no API
+// key, no cost) and keep the answer for a minute.
+// ---------------------------------------------------------------------------
+const YT_HANDLE_DEFAULT = "resofrikfm9052";
+function ytText(s) {
+  return String(s || "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+}
+async function youtubeLive(env, settings) {
+  const lv = settings.live || {};
+  const handle = String(lv.youtubeHandle || YT_HANDLE_DEFAULT).replace(/^@/, "").trim();
+  const cached = await kvJson(env, "yt:live", null);
+  if (cached && cached.at && Date.now() - cached.at < 60000) return cached;
+  const out = { at: Date.now(), live: false, id: "", title: "", start: null };
+  try {
+    const r = await xfetch(`https://www.youtube.com/@${encodeURIComponent(handle)}/live`, {
+      headers: { "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", "accept-language": "en-US,en;q=0.9", cookie: "CONSENT=YES+1; SOCS=CAI" },
+    });
+    const h = await r.text();
+    const can = h.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})"/);
+    if (can) {
+      out.id = can[1];
+      out.live = /"isLiveNow":true/.test(h);
+      const st = h.match(/"scheduledStartTime":"(\d+)"/);
+      if (st) out.start = Number(st[1]) * 1000;
+      const ti = h.match(/<meta name="title" content="([^"]*)"/);
+      if (ti) out.title = ytText(ti[1]);
+    }
+  } catch {}
+  await kvPut(env, "yt:live", JSON.stringify(out));
+  const state = await kvJson(env, "yt:state", {});
+  if (out.live && out.id && state.id !== out.id) {
+    await kvPut(env, "yt:state", JSON.stringify({ id: out.id, title: out.title, since: Date.now(), endedAt: null }));
+  } else if (!out.live && state.id && !state.endedAt) {
+    state.endedAt = Date.now();
+    await kvPut(env, "yt:state", JSON.stringify(state));
+  }
+  return out;
+}
+async function publicLiveYouTube(env, settings) {
+  const lv = settings.live || {};
+  const y = await youtubeLive(env, settings);
+  const st = await kvJson(env, "yt:state", {});
+  const fallback = lv.title || settings.station.name;
+  const upcoming = !y.live && y.id && y.start && y.start > Date.now() - 600000;
+  return {
+    configured: true,
+    source: "youtube",
+    live: !!(y.live && y.id),
+    since: y.live ? st.since || null : null,
+    title: y.live ? y.title || fallback : fallback,
+    player: y.live && y.id ? `https://www.youtube.com/embed/${y.id}` : "",
+    replay: st.id ? `https://www.youtube.com/embed/${st.id}` : "",
+    replayPoster: st.id ? `https://i.ytimg.com/vi/${st.id}/hqdefault.jpg` : "",
+    replayTitle: st.title || "",
+    endedAt: st.endedAt || null,
+    next: upcoming ? { title: y.title || fallback, start: y.start, url: `https://www.youtube.com/watch?v=${y.id}` } : null,
+  };
+}
 async function publicLive(env, settings) {
   const lv = settings.live || {};
   const base = liveBase(lv);
@@ -632,6 +694,7 @@ async function publicLive(env, settings) {
   } catch {
     s = { configured: !!base && !!lv.enabled, live: !!state.live };
   }
+  if (!s.configured) return await publicLiveYouTube(env, settings);
   const id = String(lv.inputId || "").trim();
   return {
     configured: s.configured,
