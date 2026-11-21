@@ -1400,6 +1400,31 @@ const PLATFORMS = {
   },
 };
 
+// Facebook: original posts only, at most one a day, no outside links.
+// Meta now holds back pages that repost other people's content and limits link posts, so the
+// news, obituary and now-playing posts cost the page reach for everything else (poems included).
+// Override any of this with a "facebookPolicy" object in Settings.
+const FB_DEFAULT = { originalsOnly: true, maxPerDay: 1, noLinks: true, blockKinds: ["now-playing", "community"] };
+function fbPolicy(settings) {
+  return Object.assign({}, FB_DEFAULT, (settings && settings.facebookPolicy) || {});
+}
+function fbDay(settings) {
+  return new Date().toLocaleDateString("en-CA", { timeZone: (settings.station && settings.station.timezone) || "America/New_York" });
+}
+async function fbHold(env, settings, post) {
+  const pol = fbPolicy(settings);
+  if (!pol.originalsOnly || post.kind === "manual" || post.kind === "live") return "";
+  if ((pol.blockKinds || []).includes(post.kind)) return "held back: Facebook gets original posts only";
+  const c = await kvJson(env, "fb:day", {});
+  if (c.day === fbDay(settings) && (c.n || 0) >= pol.maxPerDay) return "held back: one Facebook post a day";
+  return "";
+}
+async function fbCount(env, settings) {
+  const c = await kvJson(env, "fb:day", {});
+  const day = fbDay(settings);
+  await kvPut(env, "fb:day", JSON.stringify({ day, n: c.day === day ? (c.n || 0) + 1 : 1 }), 3 * 86400);
+}
+
 async function publishPost(env, settings, post) {
   normalizePost(post);
   const results = post.results;
@@ -1412,6 +1437,13 @@ async function publishPost(env, settings, post) {
     if (!def || !def.ready(env)) {
       results[p] = { ok: false, error: "not connected" };
       continue;
+    }
+    if (p === "facebook") {
+      const hold = await fbHold(env, settings, post);
+      if (hold) {
+        results[p] = { ok: false, skipped: true, error: hold };
+        continue;
+      }
     }
     if (!def.takes.includes(post.media.type)) {
       results[p] = { ok: false, skipped: true, error: post.media.type === "none" ? "needs a picture or video" : `doesn't take ${post.media.type}` };
@@ -1430,6 +1462,7 @@ async function publishPost(env, settings, post) {
         results[p] = { pending: true, state: out.state, since };
       } else {
         results[p] = { ok: true, id: String((out && out.id) || out || ""), at: Date.now() };
+        if (p === "facebook") await fbCount(env, settings);
       }
       if (!(r && r.pending)) attempted = true;
     } catch (e) {
@@ -1620,7 +1653,7 @@ function graph(env) {
   return "https://graph.facebook.com/" + (env.GRAPH_VERSION || "v25.0");
 }
 async function publishFacebook(env, settings, post, p) {
-  const url = postLink(env, settings, post, p);
+  const url = fbPolicy(settings).noLinks ? "" : postLink(env, settings, post, p);
   const message = (post.long || shortText(post)) + (url ? "\n\n" + url : "");
   const g = graph(env);
   const tok = env.FB_PAGE_TOKEN;
