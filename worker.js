@@ -1485,6 +1485,57 @@ ${list.length ? `<form method="post"><button type="submit">Delete the next ${Mat
   return html(page("Facebook clean-up", body));
 }
 
+// Older autopilot posts the database no longer remembers: find them on the page itself.
+// Matches posts carrying the autopilot's /go/ link, except Rare Breed Stories (they cite a Source) and live posts.
+async function fbScanPage(env) {
+  const g = graph(env);
+  let url = `${g}/${env.FB_PAGE_ID}/posts?fields=id,message,created_time&limit=100&access_token=${encodeURIComponent(env.FB_PAGE_TOKEN)}`;
+  const found = [];
+  for (let i = 0; i < 8 && url && budgetLeft() > 8; i++) {
+    const res = await xfetch(url);
+    const d = await readJson(res);
+    if (!res.ok || d.error) throw new Error(apiError(d, res));
+    for (const p of d.data || []) {
+      const m = p.message || "";
+      if (!/resofrik-autopilot\.resofrikfm\.workers\.dev\/go\//.test(m)) continue;
+      if (/\nSource:/.test(m) || /\blive\b/i.test(m.slice(0, 120))) continue;
+      found.push({ id: p.id, when: p.created_time, text: m.split("\n")[0].slice(0, 100) });
+    }
+    url = d.paging && d.paging.next;
+  }
+  return found;
+}
+async function handleFbScan(request, env) {
+  if (request.method === "POST") {
+    const g = graph(env);
+    const list = (await fbScanPage(env)).slice(0, 20);
+    let done = 0, failed = 0;
+    for (const p of list) {
+      if (budgetLeft() < 6) break;
+      try {
+        const res = await xfetch(`${g}/${encodeURIComponent(p.id)}?access_token=${encodeURIComponent(env.FB_PAGE_TOKEN)}`, { method: "DELETE" });
+        const d = await readJson(res);
+        if (!res.ok || d.error) throw new Error(apiError(d, res));
+        done++;
+      } catch (e) {
+        failed++;
+      }
+    }
+    await log(env, "info", `Facebook page scan clean-up: removed ${done}, could not remove ${failed}`);
+    return redirect(`/cleanup/facebook-page?done=${done}&failed=${failed}`);
+  }
+  const u = new URL(request.url);
+  const list = await fbScanPage(env);
+  const rows = list.map((p) => `<tr><td>${esc(String(p.when).slice(0, 10))}</td><td>${esc(p.text)}</td></tr>`).join("");
+  const done = u.searchParams.get("done");
+  const body = `<main><section><h1>Facebook page scan</h1>
+${done !== null ? `<p><b>Removed ${esc(done)}.</b> ${+u.searchParams.get("failed") ? esc(u.searchParams.get("failed")) + " could not be removed." : ""}</p>` : ""}
+<p>${list.length} older autopilot posts found on the page (news reposts, now-playing and slogan posts with the autopilot link; Rare Breed Stories and live posts are left alone). Deleting can't be undone. Each click removes up to 20.</p>
+${list.length ? `<form method="post"><button type="submit">Delete the next ${Math.min(20, list.length)} from Facebook</button></form>` : "<p>Nothing left to remove.</p>"}
+<table><tr><th>Date</th><th>Post</th></tr>${rows}</table></section></main>`;
+  return html(page("Facebook page scan", body));
+}
+
 async function publishPost(env, settings, post) {
   normalizePost(post);
   const results = post.results;
@@ -2543,6 +2594,7 @@ async function handleHttp(request, env, ctx) {
   if (p === "/logout") return redirect("/", { "set-cookie": "rp=; Path=/; Max-Age=0" });
   if (getCookie(request, "rp") !== (await sessionToken(env))) return html(loginPage(""));
   if (p === "/cleanup/facebook") return handleFbCleanup(request, env);
+  if (p === "/cleanup/facebook-page") return handleFbScan(request, env);
   if (p === "/export/subscribers.csv") {
     const rows = (await env.DB.prepare("SELECT email, name, source, created FROM subs ORDER BY created").all()).results || [];
     const csv = "email,name,source,joined\n" + rows.map((r) => [r.email, r.name || "", r.source || "", new Date(r.created).toISOString().slice(0, 10)].map((x) => `"${String(x).replace(/"/g, '""')}"`).join(",")).join("\n");
