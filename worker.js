@@ -1120,12 +1120,18 @@ function communityPost(settings, it, when, status) {
   const short = it.short || `${it.title}${when2 ? " —" + when2 : ""}${credit}`;
   const town = (settings.community.localPlaces || []).filter((p) => new RegExp(`\\b${escapeRe(p)}\\b`, "i").test(`${it.title} ${it.summary || ""} ${it.place || ""}`)).sort((a, b) => b.length - a.length)[0];
   const tags = [...(town ? ["#" + town.replace(/[^A-Za-z]/g, "")] : []), ...st.hashtagsLocal].filter((t, i, a) => a.indexOf(t) === i).slice(0, 4);
-  let long = it.long || `${it.title}${when2 ? "\n\n📍" + when2 : ""}\n\n${it.summary || ""}\n\n${it.source ? `More details from ${it.source} at the link.` : "More details at the link."}\n\n${tags.join(" ")}`;
+  let long = it.long || `${it.title}${when2 ? "\n\n📍" + when2 : ""}\n\n${it.summary || ""}\n\n${it.source ? `Reported by ${it.source}.` : ""}\n\n${tags.join(" ")}`;
   const ask = settings.community.sendPrompt;
   if (ask && !long.includes(ask)) {
     // the send-it-on question goes just above the hashtags (sends are what spread local posts)
     const m = long.match(/\n*((?:#[\w]+\s*)+)$/);
     long = m ? `${long.slice(0, m.index).trimEnd()}\n\n${ask}\n\n${m[1].trim()}` : `${long.trimEnd()}\n\n${ask}`;
+  }
+  long = long.replace(/More details[^\n]*?at the link\.?/gi, it.source ? `Reported by ${it.source}.` : "").replace(/\n{3,}/g, "\n\n");
+  const follow = settings.community.followLine || COMMUNITY_FOLLOW;
+  if (follow && !long.includes(follow)) {
+    const m2 = long.match(/\n*((?:#[\w]+\s*)+)$/);
+    long = m2 ? `${long.slice(0, m2.index).trimEnd()}\n\n${follow}\n\n${m2[1].trim()}` : `${long.trimEnd()}\n\n${follow}`;
   }
   return normalizePost({
     id: newId(),
@@ -1404,7 +1410,7 @@ const PLATFORMS = {
 // Meta now holds back pages that repost other people's content and limits link posts, so the
 // news, obituary and now-playing posts cost the page reach for everything else (poems included).
 // Override any of this with a "facebookPolicy" object in Settings.
-const FB_DEFAULT = { originalsOnly: true, maxPerDay: 1, noLinks: true, blockKinds: ["now-playing", "community"] };
+const FB_DEFAULT = { originalsOnly: true, maxPerDay: 1, noLinks: true, blockKinds: ["now-playing", "weekly", "on-air"] };
 function fbPolicy(settings) {
   return Object.assign({}, FB_DEFAULT, (settings && settings.facebookPolicy) || {});
 }
@@ -1425,6 +1431,60 @@ async function fbCount(env, settings) {
   await kvPut(env, "fb:day", JSON.stringify({ day, n: c.day === day ? (c.n || 0) + 1 : 1 }), 3 * 86400);
 }
 
+// Local news on social: only good news (events, openings, people doing good). Never obituaries, crime or court.
+const SKIP_TOPICS = /\b(obituar\w*|funeral|passed away|memorial service|accused|theft|thefts|stole|stolen|steal\w*|charged|arrest\w*|police|sheriff|crash\w*|shoot\w*|shot|killed|homicide|murder\w*|dies|died|dead|death|missing|lawsuit|sued|sentenced|court|jail|prison|scam|fraud|indicted)\b/i;
+const COMMUNITY_FOLLOW = "Follow Resofrik FM for good news from Cleveland's neighborhoods, Cleveland poets in their own words, and the reggae, soul and African music you won't hear anywhere else. For The Rare Breed.";
+
+// One-off clean-up: remove the autopilot's Facebook posts that work against the page
+// (now-playing, slogans, on-air notices, reposted news). Lists them first; deletes only when the button is pressed.
+async function fbCleanupList(env) {
+  const posts = await queryPosts(env, "WHERE kind IN ('now-playing','weekly','on-air','community') ORDER BY when_ms DESC LIMIT 1500");
+  return posts.filter((p) => p.results && p.results.facebook && p.results.facebook.ok && p.results.facebook.id && !p.results.facebook.deleted);
+}
+async function handleFbCleanup(request, env) {
+  const all = await fbCleanupList(env);
+  const list = all.filter((p) => !p.results.facebook.deleteError);
+  const stuck = all.length - list.length;
+  if (request.method === "POST") {
+    const g = graph(env);
+    let done = 0, failed = 0;
+    for (const p of list.slice(0, 25)) {
+      if (budgetLeft() < 6) break;
+      const r = p.results.facebook;
+      try {
+        const res = await xfetch(`${g}/${encodeURIComponent(r.id)}?access_token=${encodeURIComponent(env.FB_PAGE_TOKEN)}`, { method: "DELETE" });
+        const d = await readJson(res);
+        if (!res.ok || d.error) throw new Error(apiError(d, res));
+        r.deleted = Date.now();
+        done++;
+      } catch (e) {
+        const m = String((e && e.message) || e);
+        if (/does not exist|cannot be loaded|no longer available/i.test(m)) {
+          r.deleted = Date.now();
+          done++;
+        } else {
+          r.deleteError = m.slice(0, 200);
+          failed++;
+        }
+      }
+      await savePost(env, p);
+    }
+    await log(env, "info", `Facebook clean-up: removed ${done}, could not remove ${failed}`);
+    return redirect(`/cleanup/facebook?done=${done}&failed=${failed}`);
+  }
+  const u = new URL(request.url);
+  const done = u.searchParams.get("done");
+  const label = { "now-playing": "Now playing", weekly: "Slogan", "on-air": "On air", community: "Reposted news" };
+  const rows = list.slice(0, 400).map((p) => `<tr><td>${esc(new Date(p.when || 0).toISOString().slice(0, 10))}</td><td>${esc(label[p.kind] || p.kind)}</td><td>${esc((p.headline || p.short || "").slice(0, 100))}</td></tr>`).join("");
+  const body = `<main><section><h1>Facebook clean-up</h1>
+${done !== null ? `<p><b>Removed ${esc(done)} post(s).</b> ${+u.searchParams.get("failed") ? esc(u.searchParams.get("failed")) + " could not be removed and are skipped." : ""}</p>` : ""}
+<p>${list.length} autopilot posts are still on the Facebook page that hold it back: now-playing posts, slogan posts, on-air notices and reposted local news. Deleting them from Facebook can't be undone. Each click removes up to 25.</p>
+${stuck ? `<p>${stuck} could not be removed by the app (Facebook refused); remove those by hand if needed.</p>` : ""}
+${list.length ? `<form method="post"><button type="submit">Delete the next ${Math.min(25, list.length)} from Facebook</button></form>` : "<p>Nothing left to remove.</p>"}
+<table><tr><th>Date</th><th>Type</th><th>Post</th></tr>${rows}</table></section></main>`;
+  return html(page("Facebook clean-up", body));
+}
+
 async function publishPost(env, settings, post) {
   normalizePost(post);
   const results = post.results;
@@ -1436,6 +1496,10 @@ async function publishPost(env, settings, post) {
     const def = PLATFORMS[p];
     if (!def || !def.ready(env)) {
       results[p] = { ok: false, error: "not connected" };
+      continue;
+    }
+    if (post.kind === "community" && SKIP_TOPICS.test(`${post.headline || ""} ${post.short || ""} ${post.summary || ""}`)) {
+      results[p] = { ok: false, skipped: true, error: "held back: we only post good local news" };
       continue;
     }
     if (p === "facebook") {
@@ -2478,6 +2542,7 @@ async function handleHttp(request, env, ctx) {
   }
   if (p === "/logout") return redirect("/", { "set-cookie": "rp=; Path=/; Max-Age=0" });
   if (getCookie(request, "rp") !== (await sessionToken(env))) return html(loginPage(""));
+  if (p === "/cleanup/facebook") return handleFbCleanup(request, env);
   if (p === "/export/subscribers.csv") {
     const rows = (await env.DB.prepare("SELECT email, name, source, created FROM subs ORDER BY created").all()).results || [];
     const csv = "email,name,source,joined\n" + rows.map((r) => [r.email, r.name || "", r.source || "", new Date(r.created).toISOString().slice(0, 10)].map((x) => `"${String(x).replace(/"/g, '""')}"`).join(",")).join("\n");
